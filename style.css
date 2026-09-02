@@ -178,3 +178,19 @@ dialog.dialog-wide{width:min(760px,94vw);}
 .cal-chip.NOEL{background:var(--noel-bg); color:var(--noel);}
 .cal-chip:hover{text-decoration:line-through; filter:brightness(.96);}
 .cal-chip:focus-visible{outline:2px solid var(--primary); outline-offset:1px;}
+
+/* ---------- remitentes EPS ---------- */
+.eps-label{display:block; margin:2px 0 6px;}
+#f-noel-eps-rows{display:flex; flex-direction:column; gap:8px; margin-bottom:10px;}
+.eps-row{display:grid; grid-template-columns:1fr 90px auto; gap:8px; align-items:center;}
+.eps-row select{min-width:0;}
+.btn-sm{padding:6px 12px; font-size:.78rem;}
+.btn.ghost-icon{
+  background:transparent; color:var(--danger); border:1px solid var(--line); padding:6px 10px;
+  border-radius:8px; line-height:1;
+}
+.btn.ghost-icon:hover{background:var(--danger-bg);}
+#tbl-remitentes td:first-child{min-width:220px;}
+#tbl-remitentes input[type=text]{width:100%;}
+#tbl-remitentes input[type=number]{width:130px; text-align:right;}
+.resumen-item .row b{color:var(--ink);}

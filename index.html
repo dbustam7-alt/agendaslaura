@@ -89,16 +89,25 @@
               <td><input type="number" id="cfg-noel-pol" value="0" step="1000" aria-label="Tarifa NOEL póliza"></td>
               <td>$ / paciente</td>
             </tr>
-            <tr>
-              <td><span class="badge NOEL">NOEL</span></td>
-              <td>EPS</td>
-              <td><input type="number" id="cfg-noel-eps" value="0" step="1000" aria-label="Tarifa NOEL EPS"></td>
-              <td>$ / paciente</td>
-            </tr>
           </tbody>
         </table>
       </div>
       <button id="btn-save-config" class="btn primary">Guardar maestro de tarifas</button>
+    </div>
+
+    <div class="dlg-section">
+      <h3>Remitentes EPS <span class="badge NOEL">NOEL</span></h3>
+      <p class="hint">Cada remitente (EPS, aseguradora o medicina prepagada) tiene su propia tarifa por paciente.</p>
+      <div class="table-wrap">
+        <table id="tbl-remitentes">
+          <thead><tr><th>Remitente</th><th>Tarifa ($/paciente)</th></tr></thead>
+          <tbody id="remitentes-rows"></tbody>
+        </table>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button type="button" id="btn-add-remitente" class="btn secondary">+ Agregar remitente</button>
+        <button type="button" id="btn-save-remitentes" class="btn primary">Guardar remitentes EPS</button>
+      </div>
     </div>
 
     <div class="dlg-section">
@@ -192,16 +201,18 @@
       </label>
     </div>
 
-    <div class="grid" id="noel-fields" hidden>
-      <label>N° Pacientes Particular
-        <input type="number" id="f-noel-part" value="0" min="0">
-      </label>
-      <label>N° Pacientes Póliza
-        <input type="number" id="f-noel-pol" value="0" min="0">
-      </label>
-      <label>N° Pacientes EPS
-        <input type="number" id="f-noel-eps" value="0" min="0">
-      </label>
+    <div id="noel-fields" hidden>
+      <div class="grid">
+        <label>N° Pacientes Particular
+          <input type="number" id="f-noel-part" value="0" min="0">
+        </label>
+        <label>N° Pacientes Póliza
+          <input type="number" id="f-noel-pol" value="0" min="0">
+        </label>
+      </div>
+      <label class="eps-label">Pacientes EPS por remitente</label>
+      <div id="f-noel-eps-rows"></div>
+      <button type="button" id="btn-noel-eps-add" class="btn secondary btn-sm">+ Agregar remitente EPS</button>
     </div>
 
     <button id="btn-add-turno" class="btn primary">Registrar turno</button>

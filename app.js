@@ -12,7 +12,6 @@ const DEFAULT_CONFIG = {
   aunaNoc: 87000,
   noelPart: 0,
   noelPol: 0,
-  noelEps: 0,
 };
 
 let CONFIG = {...DEFAULT_CONFIG};
@@ -33,7 +32,17 @@ const sb = (window.supabase && window.supabase.createClient)
   : null;
 
 // ---------- Persistencia (Supabase) ----------
+const TURNO_SELECT = "*, turno_eps_detalle(cantidad, remitente_id, noel_remitentes(nombre, tarifa))";
+
 function rowToTurno(row){
+  const epsDetalle = (row.turno_eps_detalle || [])
+    .filter(d => d.cantidad > 0)
+    .map(d => ({
+      remitenteId: d.remitente_id,
+      nombre: d.noel_remitentes ? d.noel_remitentes.nombre : "(remitente eliminado)",
+      tarifa: d.noel_remitentes ? Number(d.noel_remitentes.tarifa) : 0,
+      cantidad: d.cantidad,
+    }));
   return {
     id: row.id,
     entidad: row.entidad,
@@ -43,7 +52,7 @@ function rowToTurno(row){
     sede: row.sede || undefined,
     noelPart: row.noel_part,
     noelPol: row.noel_pol,
-    noelEps: row.noel_eps,
+    epsDetalle,
   };
 }
 function turnoToRow(t){
@@ -55,26 +64,64 @@ function turnoToRow(t){
     sede: t.entidad === "AUNA" ? (t.sede || "La 80") : null,
     noel_part: t.entidad === "NOEL" ? (t.noelPart || 0) : 0,
     noel_pol: t.entidad === "NOEL" ? (t.noelPol || 0) : 0,
-    noel_eps: t.entidad === "NOEL" ? (t.noelEps || 0) : 0,
   };
 }
+async function saveEpsDetalle(turnoId, epsDetalle){
+  const rows = (epsDetalle || []).filter(d => d.cantidad > 0 && d.remitenteId).map(d => ({
+    turno_id: turnoId, remitente_id: d.remitenteId, cantidad: d.cantidad,
+  }));
+  if (rows.length === 0) return;
+  const { error } = await sb.from("turno_eps_detalle").insert(rows);
+  if (error) throw error;
+}
 async function fetchTurnos(){
-  const { data, error } = await sb.from("turnos").select("*").order("fecha").order("inicio");
+  const { data, error } = await sb.from("turnos").select(TURNO_SELECT).order("fecha").order("inicio");
   if (error){ showAlert("Error cargando turnos: " + error.message, "error"); return []; }
   return data.map(rowToTurno);
 }
 async function insertTurnoDB(t){
   const { data, error } = await sb.from("turnos").insert(turnoToRow(t)).select().single();
   if (error) throw error;
-  return rowToTurno(data);
+  if (t.entidad === "NOEL") await saveEpsDetalle(data.id, t.epsDetalle);
+  const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).eq("id", data.id).single();
+  if (err2) throw err2;
+  return rowToTurno(full);
 }
 async function insertTurnosBulkDB(list){
   const { data, error } = await sb.from("turnos").insert(list.map(turnoToRow)).select();
   if (error) throw error;
-  return data.map(rowToTurno);
+  // Supabase devuelve las filas insertadas en el mismo orden que se enviaron.
+  for (let i = 0; i < data.length; i++){
+    if (list[i].entidad === "NOEL" && list[i].epsDetalle && list[i].epsDetalle.length){
+      await saveEpsDetalle(data[i].id, list[i].epsDetalle);
+    }
+  }
+  const ids = data.map(r => r.id);
+  const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).in("id", ids);
+  if (err2) throw err2;
+  return full.map(rowToTurno);
 }
 async function deleteTurnoDB(id){
   const { error } = await sb.from("turnos").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ---------- Maestro de remitentes NOEL (EPS/pólizas/prepagadas) ----------
+let REMITENTES = [];
+
+async function fetchRemitentes(){
+  const { data, error } = await sb.from("noel_remitentes").select("*").eq("activo", true).order("orden");
+  if (error){ showAlert("Error cargando remitentes: " + error.message, "error"); return []; }
+  return data.map(r => ({ id: r.id, nombre: r.nombre, tarifa: Number(r.tarifa) }));
+}
+async function insertRemitenteDB(nombre, tarifa){
+  const orden = REMITENTES.length;
+  const { data, error } = await sb.from("noel_remitentes").insert({ nombre, tarifa, orden, activo:true }).select().single();
+  if (error) throw error;
+  return { id: data.id, nombre: data.nombre, tarifa: Number(data.tarifa) };
+}
+async function updateRemitenteDB(id, nombre, tarifa){
+  const { error } = await sb.from("noel_remitentes").update({ nombre, tarifa }).eq("id", id);
   if (error) throw error;
 }
 
@@ -88,7 +135,6 @@ function rowToConfig(row){
     aunaNoc: Number(row.auna_noc),
     noelPart: Number(row.noel_part),
     noelPol: Number(row.noel_pol),
-    noelEps: Number(row.noel_eps),
   };
 }
 function configToRow(cfg){
@@ -101,7 +147,6 @@ function configToRow(cfg){
     auna_noc: cfg.aunaNoc,
     noel_part: cfg.noelPart,
     noel_pol: cfg.noelPol,
-    noel_eps: cfg.noelEps,
   };
 }
 async function fetchConfig(){
@@ -135,6 +180,9 @@ async function enterApp(){
 
   CONFIG = await fetchConfig();
   loadConfigIntoForm();
+  REMITENTES = await fetchRemitentes();
+  renderRemitentesMaestro();
+  renderRemitentesFormOptions();
   TURNOS = await fetchTurnos();
 
   document.getElementById("f-fecha").value = new Date().toISOString().slice(0,10);
@@ -314,9 +362,15 @@ function calcularTurno(t){
     return { horas, subtotal: b.subtotal, detalle };
   }
   if (t.entidad === "NOEL"){
-    const subtotal = (t.noelPart||0)*CONFIG.noelPart + (t.noelPol||0)*CONFIG.noelPol + (t.noelEps||0)*CONFIG.noelEps;
-    const detalle = `Part ${t.noelPart||0} / Póliza ${t.noelPol||0} / EPS ${t.noelEps||0}`;
-    return { horas, subtotal, detalle };
+    const epsDetalle = t.epsDetalle || [];
+    const epsTotal = epsDetalle.reduce((s,d)=> s + d.cantidad, 0);
+    const epsSubtotal = epsDetalle.reduce((s,d)=> s + d.cantidad*d.tarifa, 0);
+    const subtotal = (t.noelPart||0)*CONFIG.noelPart + (t.noelPol||0)*CONFIG.noelPol + epsSubtotal;
+    const epsResumen = epsDetalle.length
+      ? epsDetalle.map(d => `${d.nombre} (${d.cantidad})`).join(", ")
+      : "0";
+    const detalle = `Part ${t.noelPart||0} · Póliza ${t.noelPol||0} · EPS ${epsTotal}: ${epsResumen}`;
+    return { horas, subtotal, detalle, epsDetalle, epsTotal };
   }
   // CES
   return { horas, subtotal: 0, detalle: "Registro horas contrato" };
@@ -385,7 +439,7 @@ function renderResumen(){
   const acc = {
     CES:{horas:0, subtotal:0},
     AUNA:{horas:0, subtotal:0, ordMin:0, nocMin:0},
-    NOEL:{horas:0, subtotal:0, part:0, pol:0, eps:0},
+    NOEL:{horas:0, subtotal:0, part:0, pol:0, epsPorRemitente:{}},
   };
   for (const t of list){
     const calc = calcularTurno(t);
@@ -397,9 +451,21 @@ function renderResumen(){
       acc.AUNA.ordMin += b.ordMin; acc.AUNA.nocMin += b.nocMin;
     }
     if (t.entidad === "NOEL"){
-      acc.NOEL.part += t.noelPart||0; acc.NOEL.pol += t.noelPol||0; acc.NOEL.eps += t.noelEps||0;
+      acc.NOEL.part += t.noelPart||0; acc.NOEL.pol += t.noelPol||0;
+      for (const d of (t.epsDetalle||[])){
+        const cur = acc.NOEL.epsPorRemitente[d.nombre] || {cantidad:0, subtotal:0};
+        cur.cantidad += d.cantidad;
+        cur.subtotal += d.cantidad * d.tarifa;
+        acc.NOEL.epsPorRemitente[d.nombre] = cur;
+      }
     }
   }
+  const epsRows = Object.entries(acc.NOEL.epsPorRemitente)
+    .sort((a,b)=> b[1].subtotal - a[1].subtotal)
+    .map(([nombre, v]) => `<div class="row"><span>${nombre}</span><b>${v.cantidad} pac. · ${fmtMoney(v.subtotal)}</b></div>`)
+    .join("");
+  const epsTotalPac = Object.values(acc.NOEL.epsPorRemitente).reduce((s,v)=>s+v.cantidad,0);
+
   const el = document.getElementById("resumen-financiero");
   const total = acc.CES.subtotal + acc.AUNA.subtotal + acc.NOEL.subtotal;
   el.innerHTML = `
@@ -418,7 +484,8 @@ function renderResumen(){
       <h3>🟠 NOEL</h3>
       <div class="row"><span>Particular</span><span>${acc.NOEL.part} pac.</span></div>
       <div class="row"><span>Póliza</span><span>${acc.NOEL.pol} pac.</span></div>
-      <div class="row"><span>EPS</span><span>${acc.NOEL.eps} pac.</span></div>
+      <div class="row"><span><strong>EPS (total)</strong></span><span>${epsTotalPac} pac.</span></div>
+      ${epsRows}
       <div class="total">${fmtMoney(acc.NOEL.subtotal)}</div>
     </div>
     <div class="resumen-item">
@@ -510,6 +577,82 @@ function toggleFormFields(){
   const entidad = document.getElementById("f-entidad").value;
   document.getElementById("f-sede-wrap").hidden = entidad !== "AUNA";
   document.getElementById("noel-fields").hidden = entidad !== "NOEL";
+  if (entidad === "NOEL" && document.getElementById("f-noel-eps-rows").children.length === 0){
+    addEpsFormRow();
+  }
+}
+
+// ---------- Remitentes EPS: filas dinámicas del formulario de turno ----------
+function addEpsFormRow(){
+  const wrap = document.getElementById("f-noel-eps-rows");
+  const row = document.createElement("div");
+  row.className = "eps-row";
+  row.innerHTML = `
+    <select class="f-noel-eps-remitente">${REMITENTES.map(r=>`<option value="${r.id}">${r.nombre}</option>`).join("")}</select>
+    <input type="number" class="f-noel-eps-cantidad" min="0" value="0" placeholder="Cant.">
+    <button type="button" class="btn ghost-icon eps-row-remove" aria-label="Quitar remitente">✕</button>
+  `;
+  row.querySelector(".eps-row-remove").addEventListener("click", ()=> row.remove());
+  wrap.appendChild(row);
+}
+function resetEpsFormRows(){
+  document.getElementById("f-noel-eps-rows").innerHTML = "";
+  addEpsFormRow();
+}
+function collectEpsFormRows(){
+  return Array.from(document.querySelectorAll("#f-noel-eps-rows .eps-row")).map(row=>{
+    const remitenteId = row.querySelector(".f-noel-eps-remitente").value;
+    const cantidad = Number(row.querySelector(".f-noel-eps-cantidad").value || 0);
+    const rem = REMITENTES.find(r=>r.id === remitenteId);
+    return { remitenteId, nombre: rem ? rem.nombre : "", tarifa: rem ? rem.tarifa : 0, cantidad };
+  }).filter(d=>d.cantidad > 0);
+}
+function renderRemitentesFormOptions(){
+  document.querySelectorAll(".f-noel-eps-remitente").forEach(sel=>{
+    const cur = sel.value;
+    sel.innerHTML = REMITENTES.map(r=>`<option value="${r.id}">${r.nombre}</option>`).join("");
+    if (cur) sel.value = cur;
+  });
+}
+
+// ---------- Maestro de remitentes EPS ----------
+function renderRemitentesMaestro(){
+  const wrap = document.getElementById("remitentes-rows");
+  wrap.innerHTML = REMITENTES.map(r => `
+    <tr data-id="${r.id}">
+      <td><input type="text" class="rem-nombre" value="${String(r.nombre).replace(/"/g,"&quot;")}"></td>
+      <td class="num"><input type="number" class="rem-tarifa" value="${r.tarifa}" step="1000"></td>
+    </tr>
+  `).join("");
+}
+function addRemitenteMaestroRow(){
+  const wrap = document.getElementById("remitentes-rows");
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input type="text" class="rem-nombre" placeholder="Nombre del remitente"></td>
+    <td class="num"><input type="number" class="rem-tarifa" value="0" step="1000"></td>
+  `;
+  wrap.appendChild(tr);
+}
+async function saveRemitentesMaestro(){
+  const rows = Array.from(document.querySelectorAll("#remitentes-rows tr"));
+  try{
+    for (const row of rows){
+      const nombre = row.querySelector(".rem-nombre").value.trim();
+      const tarifa = Number(row.querySelector(".rem-tarifa").value || 0);
+      if (!nombre) continue;
+      const id = row.dataset.id;
+      if (id) await updateRemitenteDB(id, nombre, tarifa);
+      else await insertRemitenteDB(nombre, tarifa);
+    }
+    REMITENTES = await fetchRemitentes();
+    renderRemitentesMaestro();
+    renderRemitentesFormOptions();
+    showAlert("Remitentes EPS guardados.", "ok");
+    renderAll();
+  }catch(e){
+    showAlert("Error guardando remitentes EPS: " + e.message, "error");
+  }
 }
 
 async function handleAddTurno(){
@@ -530,7 +673,7 @@ async function handleAddTurno(){
   if (entidad === "NOEL"){
     nuevo.noelPart = Number(document.getElementById("f-noel-part").value || 0);
     nuevo.noelPol = Number(document.getElementById("f-noel-pol").value || 0);
-    nuevo.noelEps = Number(document.getElementById("f-noel-eps").value || 0);
+    nuevo.epsDetalle = collectEpsFormRows();
   }
 
   const check = validarTurno(nuevo);
@@ -543,6 +686,11 @@ async function handleAddTurno(){
     const saved = await insertTurnoDB(nuevo);
     TURNOS.push(saved);
     showAlert(`Turno ${entidad} registrado sin conflictos (${fecha} ${inicio}–${fin}).`, "ok");
+    if (entidad === "NOEL"){
+      document.getElementById("f-noel-part").value = "0";
+      document.getElementById("f-noel-pol").value = "0";
+      resetEpsFormRows();
+    }
     renderAll();
   }catch(e){
     showAlert("Error guardando el turno: " + e.message, "error");
@@ -557,8 +705,9 @@ const IMPORT_FORMATS = {
           placeholder:"2026-10-05\t07:00\t11:00\n2026-10-06\t07:00\t10:30" },
   AUNA: { cols:["Fecha","Inicio","Fin","Sede"], hint:"Columnas: Fecha, Hora inicio, Hora fin, Sede (La 80 / Sur).",
           placeholder:"2026-09-05\t08:00\t16:00\tLa 80\n2026-09-08\t18:00\t22:00\tSur" },
-  NOEL: { cols:["Fecha","Inicio","Fin","Particular","Póliza","EPS"], hint:"Columnas: Fecha, Hora inicio, Hora fin, N° Particular, N° Póliza, N° EPS.",
-          placeholder:"2026-09-03\t08:00\t12:00\t2\t1\t4\n2026-09-15\t14:00\t18:00\t1\t3\t2" },
+  NOEL: { cols:["Fecha","Inicio","Fin","Particular","Póliza","Remitente EPS","Cant. EPS"],
+          hint:"Columnas: Fecha, Hora inicio, Hora fin, N° Particular, N° Póliza, Nombre del remitente EPS (debe existir en el maestro de tarifas), N° pacientes de ese remitente. Si un turno tiene pacientes de varios remitentes EPS, repite la fila con la misma Fecha/Inicio/Fin y cambia solo el remitente y la cantidad.",
+          placeholder:"2026-09-03\t08:00\t12:00\t2\t1\tSalud Total EPS\t3\n2026-09-03\t08:00\t12:00\t\t\tEntidad Promotora de Salud Sanitas\t2\n2026-09-15\t14:00\t18:00\t1\t0\tMedisanitas\t2" },
 };
 
 function normalizeImportDate(raw){
@@ -642,6 +791,11 @@ function buildImportPreview(){
   }
   if (normalizeImportDate(rows[0][0]) === null) rows = rows.slice(1); // descarta fila de encabezado si la hay
 
+  importPreviewRows = entidad === "NOEL" ? buildNoelImportPreview(rows) : buildSimpleImportPreview(entidad, rows);
+  renderImportPreview(entidad);
+}
+
+function buildSimpleImportPreview(entidad, rows){
   const aceptadosLote = [];
   const results = [];
 
@@ -655,15 +809,10 @@ function buildImportPreview(){
       return;
     }
 
-    const nuevo = { id:`imp-${Date.now()}-${idx}`, entidad, fecha, inicio, fin };
+    const nuevo = { entidad, fecha, inicio, fin };
     if (entidad === "AUNA"){
       const s = (cols[3]||"").toLowerCase();
       nuevo.sede = s.includes("sur") ? "Sur" : "La 80";
-    }
-    if (entidad === "NOEL"){
-      nuevo.noelPart = Number(cols[3]) || 0;
-      nuevo.noelPol  = Number(cols[4]) || 0;
-      nuevo.noelEps  = Number(cols[5]) || 0;
     }
 
     const check = validarTurno(nuevo, null, aceptadosLote);
@@ -674,9 +823,73 @@ function buildImportPreview(){
     aceptadosLote.push(nuevo);
     results.push({idx, cols, turno:nuevo, status:"ok", message:"Se importará"});
   });
+  return results;
+}
 
-  importPreviewRows = results;
-  renderImportPreview(entidad);
+// Agrupa filas con la misma Fecha+Inicio+Fin en un solo turno NOEL con varias
+// líneas de EPS (una por remitente).
+function buildNoelImportPreview(rows){
+  const groups = new Map();
+  const order = [];
+
+  rows.forEach((cols, idx)=>{
+    const fecha = normalizeImportDate(cols[0]);
+    const inicio = normalizeImportTime(cols[1]);
+    const fin = normalizeImportTime(cols[2]);
+    const valid = !!(fecha && inicio && fin);
+    const key = valid ? `${fecha}|${inicio}|${fin}` : `__invalid_${idx}`;
+
+    if (!groups.has(key)){
+      groups.set(key, { idx, fecha, inicio, fin, valid, part:0, pol:0, eps:[] });
+      order.push(key);
+    }
+    const g = groups.get(key);
+    if (!valid) return;
+
+    if (cols[3] !== undefined && cols[3] !== "") g.part = Number(cols[3]) || 0;
+    if (cols[4] !== undefined && cols[4] !== "") g.pol = Number(cols[4]) || 0;
+    const remNombre = (cols[5]||"").trim();
+    const cantidad = Number(cols[6]) || 0;
+    if (remNombre && cantidad > 0) g.eps.push({ remNombre, cantidad });
+  });
+
+  const aceptadosLote = [];
+  const results = [];
+
+  order.forEach(key=>{
+    const g = groups.get(key);
+    if (!g.valid){
+      results.push({idx:g.idx, display:["","","","","","",""], status:"invalid", message:"Fecha u hora con formato inválido."});
+      return;
+    }
+
+    const epsResuelto = [];
+    const noEncontrados = [];
+    for (const e of g.eps){
+      const match = REMITENTES.find(r => r.nombre.toLowerCase() === e.remNombre.toLowerCase());
+      if (match) epsResuelto.push({ remitenteId: match.id, nombre: match.nombre, tarifa: match.tarifa, cantidad: e.cantidad });
+      else noEncontrados.push(e.remNombre);
+    }
+    const epsResumen = epsResuelto.map(d=>`${d.nombre} (${d.cantidad})`).join(", ") || "—";
+    const display = [g.fecha, g.inicio, g.fin, String(g.part||0), String(g.pol||0), epsResumen, ""];
+
+    if (noEncontrados.length){
+      results.push({idx:g.idx, display, status:"invalid",
+        message:`Remitente no encontrado en el maestro de tarifas: ${noEncontrados.join(", ")}. Agrégalo primero en "Tarifas y bloqueo CES".`});
+      return;
+    }
+
+    const nuevo = { entidad:"NOEL", fecha:g.fecha, inicio:g.inicio, fin:g.fin, noelPart:g.part||0, noelPol:g.pol||0, epsDetalle: epsResuelto };
+    const check = validarTurno(nuevo, null, aceptadosLote);
+    if (!check.ok){
+      results.push({idx:g.idx, display, turno:nuevo, status:"conflict", message:check.motivo});
+      return;
+    }
+    aceptadosLote.push(nuevo);
+    results.push({idx:g.idx, display, turno:nuevo, status:"ok", message:"Se importará"});
+  });
+
+  return results;
 }
 
 function renderImportPreview(entidad){
@@ -687,7 +900,8 @@ function renderImportPreview(entidad){
 
   const headCols = fmt.cols.map(c=>`<th>${c}</th>`).join("");
   const bodyRows = importPreviewRows.map(r=>{
-    const cells = fmt.cols.map((_,i)=> `<td>${r.cols[i] ?? ""}</td>`).join("");
+    const values = r.display || fmt.cols.map((_,i)=> r.cols[i] ?? "");
+    const cells = values.slice(0, fmt.cols.length).map(v=>`<td>${v}</td>`).join("");
     const badgeClass = r.status;
     const badgeText = r.status === "ok" ? "✓ Se importará" : r.status === "conflict" ? "⚠ Choque" : "✕ Inválido";
     return `<tr><td>${r.idx+1}</td>${cells}<td><span class="imp-status ${badgeClass}" title="${(r.message||"").replace(/"/g,"&quot;")}">${badgeText}</span></td></tr>`;
@@ -751,15 +965,33 @@ function buildCloseOfMonth(){
 
   // NOEL
   out += `## NOEL\n\n`;
-  out += `| Fecha | Turno | Particular | Póliza | EPS | Subtotal |\n`;
+  out += `| Fecha | Turno | Particular | Póliza | EPS (detalle por remitente) | Subtotal |\n`;
   out += `|---|---|---|---|---|---|\n`;
   let noelTotal = 0;
   for (const t of porEntidad.NOEL){
     const calc = calcularTurno(t);
     noelTotal += calc.subtotal;
-    out += `| ${t.fecha} | ${t.inicio}-${t.fin} | ${t.noelPart||0} | ${t.noelPol||0} | ${t.noelEps||0} | ${fmtMoney(calc.subtotal)} |\n`;
+    const epsTexto = (calc.epsDetalle||[]).map(d=>`${d.nombre} (${d.cantidad})`).join(", ") || "—";
+    out += `| ${t.fecha} | ${t.inicio}-${t.fin} | ${t.noelPart||0} | ${t.noelPol||0} | ${epsTexto} | ${fmtMoney(calc.subtotal)} |\n`;
   }
   out += `| **TOTAL NOEL** | | | | | **${fmtMoney(noelTotal)}** |\n\n`;
+
+  const epsPorRemitente = {};
+  for (const t of porEntidad.NOEL){
+    for (const d of calcularTurno(t).epsDetalle || []){
+      const cur = epsPorRemitente[d.nombre] || {cantidad:0, subtotal:0};
+      cur.cantidad += d.cantidad; cur.subtotal += d.cantidad*d.tarifa;
+      epsPorRemitente[d.nombre] = cur;
+    }
+  }
+  if (Object.keys(epsPorRemitente).length){
+    out += `### NOEL — EPS por remitente\n\n`;
+    out += `| Remitente | Pacientes | Subtotal |\n|---|---|---|\n`;
+    for (const [nombre, v] of Object.entries(epsPorRemitente).sort((a,b)=>b[1].subtotal-a[1].subtotal)){
+      out += `| ${nombre} | ${v.cantidad} | ${fmtMoney(v.subtotal)} |\n`;
+    }
+    out += `\n`;
+  }
 
   // CES
   out += `## CES (registro de horas — cumplimiento contrato)\n\n`;
@@ -786,13 +1018,14 @@ function toCsv(){
   const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
   const list = TURNOS.filter(t => t.fecha.slice(0,7) === month)
     .sort((a,b)=> turnoInterval(a).start - turnoInterval(b).start);
-  const rows = [["Fecha","Entidad","Sede/Turno","Inicio","Fin","Horas","Particular","Poliza","EPS","Subtotal"]];
+  const rows = [["Fecha","Entidad","Sede/Turno","Inicio","Fin","Horas","Particular","Poliza","EPS (detalle por remitente)","Subtotal"]];
   for (const t of list){
     const calc = calcularTurno(t);
+    const epsTexto = (calc.epsDetalle||[]).map(d=>`${d.nombre} (${d.cantidad})`).join("; ");
     rows.push([
       t.fecha, t.entidad, t.sede||"", t.inicio, t.fin,
       fmtHours(calc.horas),
-      t.noelPart||"", t.noelPol||"", t.noelEps||"",
+      t.noelPart||"", t.noelPol||"", epsTexto,
       calc.subtotal ? Math.round(calc.subtotal) : ""
     ]);
   }
@@ -824,7 +1057,7 @@ function downloadExcel(){
   }
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws["!cols"] = [{wch:12},{wch:8},{wch:8},{wch:9},{wch:42},{wch:14}];
+  ws["!cols"] = [{wch:12},{wch:8},{wch:8},{wch:9},{wch:60},{wch:14}];
   for (let r = 1; r < rows.length; r++){
     const cell = ws[XLSX.utils.encode_cell({r, c:5})];
     if (cell) cell.z = '"$"#,##0';
@@ -845,7 +1078,6 @@ function loadConfigIntoForm(){
   document.getElementById("cfg-auna-noc").value = CONFIG.aunaNoc;
   document.getElementById("cfg-noel-part").value = CONFIG.noelPart;
   document.getElementById("cfg-noel-pol").value = CONFIG.noelPol;
-  document.getElementById("cfg-noel-eps").value = CONFIG.noelEps;
 }
 function readConfigFromForm(){
   CONFIG = {
@@ -857,7 +1089,6 @@ function readConfigFromForm(){
     aunaNoc: Number(document.getElementById("cfg-auna-noc").value || 0),
     noelPart: Number(document.getElementById("cfg-noel-part").value || 0),
     noelPol: Number(document.getElementById("cfg-noel-pol").value || 0),
-    noelEps: Number(document.getElementById("cfg-noel-eps").value || 0),
   };
 }
 
@@ -907,6 +1138,10 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
   document.getElementById("btn-add-turno").addEventListener("click", handleAddTurno);
   document.getElementById("filter-month").addEventListener("change", renderAll);
+
+  document.getElementById("btn-noel-eps-add").addEventListener("click", addEpsFormRow);
+  document.getElementById("btn-add-remitente").addEventListener("click", addRemitenteMaestroRow);
+  document.getElementById("btn-save-remitentes").addEventListener("click", saveRemitentesMaestro);
 
   const dlgImport = document.getElementById("dlg-import");
   document.getElementById("btn-open-import").addEventListener("click", ()=>{
