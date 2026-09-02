@@ -471,6 +471,15 @@ function updateImportFormatHint(){
   document.getElementById("imp-textarea").placeholder = fmt.placeholder;
 }
 
+function downloadImportTemplate(){
+  const entidad = document.getElementById("imp-entidad").value;
+  const fmt = IMPORT_FORMATS[entidad];
+  const exampleRows = fmt.placeholder.split("\n").map(line => line.split("\t"));
+  const rows = [fmt.cols, ...exampleRows];
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  downloadFile(`plantilla-turnos-${entidad.toLowerCase()}.csv`, csv, "text/csv;charset=utf-8;");
+}
+
 function handleImportFile(file){
   const name = file.name.toLowerCase();
   if (name.endsWith(".xlsx") || name.endsWith(".xls")){
@@ -766,6 +775,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
   document.getElementById("imp-file").addEventListener("change", (e)=>{
     if (e.target.files[0]) handleImportFile(e.target.files[0]);
   });
+  document.getElementById("btn-imp-template").addEventListener("click", downloadImportTemplate);
   document.getElementById("btn-imp-preview").addEventListener("click", buildImportPreview);
   document.getElementById("btn-imp-confirm").addEventListener("click", commitImport);
 
