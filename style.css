@@ -104,11 +104,6 @@ tbody tr:hover{background:#fafbfd;}
 .resumen-item .row{display:flex; justify-content:space-between; font-size:.82rem; color:var(--muted); margin:2px 0;}
 .resumen-item .total{font-size:1.15rem; font-weight:800; margin-top:8px; color:var(--ink);}
 
-#export-output{
-  background:#0f172a; color:#e2e8f0; padding:14px; border-radius:10px; font-size:.78rem;
-  white-space:pre-wrap; word-break:break-word; max-height:400px; overflow:auto; margin:0;
-}
-
 /* ---------- settings dialog ---------- */
 dialog.app-dialog{
   border:none; border-radius:14px; padding:0; margin:auto; width:min(640px,92vw); max-height:86vh;

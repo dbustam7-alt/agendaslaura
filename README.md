@@ -46,7 +46,7 @@ Cada vez que se registra un turno o se consulta el balance, la app muestra:
 Desde "📥 Importar masivo" se pega o sube un CSV/Excel por entidad. El formato de columnas se adapta al tipo de la entidad elegida (fecha/horas simples para franja fija y por hora, más sede para por hora; fecha/horas + remitente + cantidad para por agenda, agrupando filas con la misma fecha/hora en un solo turno con varios remitentes).
 
 ### Exportación / cierre de mes
-Botón "Cierre de mes" genera un bloque Markdown (tabla) discriminado por entidad según su tipo, listo para copiar a Excel/CSV, y permite descargarlo como `.csv` o `.xlsx`.
+La sección "Cierre de mes" permite descargar el mes filtrado en la agenda como `.csv` o `.xlsx` (Fecha, Entidad, Sede, Inicio, Fin, Horas, Detalle y Subtotal).
 
 ## Estructura de archivos
 - `index.html` — estructura, pantalla de login y formularios.

@@ -1123,81 +1123,6 @@ async function commitImport(){
 }
 
 // ---------- Exportación cierre de mes ----------
-function buildCloseOfMonth(){
-  const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
-  const list = TURNOS.filter(t => t.fecha.slice(0,7) === month)
-    .sort((a,b)=> turnoInterval(a).start - turnoInterval(b).start);
-
-  const porEntidad = {};
-  for (const t of list) (porEntidad[t.entidadId] = porEntidad[t.entidadId] || []).push(t);
-
-  let out = `# Cierre de mes — ${month}\n\n`;
-  let totalFacturable = 0;
-  const resumenFilas = [];
-
-  for (const ent of [...ENTIDADES].sort((a,b)=>a.orden-b.orden)){
-    const turnos = porEntidad[ent.id] || [];
-    if (turnos.length === 0) continue;
-
-    out += `## ${ent.nombre}\n\n`;
-
-    if (ent.tipo === "por_hora"){
-      out += `| Fecha | Sede | Inicio | Fin | Horas Ord. | Horas Noc/Finde | Subtotal |\n|---|---|---|---|---|---|---|\n`;
-      let subtotalEnt = 0;
-      for (const t of turnos){
-        const calc = calcularTurno(t);
-        subtotalEnt += calc.subtotal;
-        out += `| ${t.fecha} | ${t.sede||""} | ${t.inicio} | ${t.fin} | ${fmtHours(calc.ordMin/60)} | ${fmtHours(calc.nocMin/60)} | ${fmtMoney(calc.subtotal)} |\n`;
-      }
-      out += `| **TOTAL ${ent.nombre}** | | | | | | **${fmtMoney(subtotalEnt)}** |\n\n`;
-      totalFacturable += subtotalEnt;
-      resumenFilas.push([ent.nombre, subtotalEnt]);
-
-    } else if (ent.tipo === "por_agenda"){
-      out += `| Fecha | Turno | Detalle por remitente | Subtotal |\n|---|---|---|---|\n`;
-      let subtotalEnt = 0;
-      const porRemitente = {};
-      for (const t of turnos){
-        const calc = calcularTurno(t);
-        subtotalEnt += calc.subtotal;
-        const detalleTexto = (calc.detalleLista||[]).map(d=>`${d.nombre} (${d.cantidad})`).join(", ") || "—";
-        out += `| ${t.fecha} | ${t.inicio}-${t.fin} | ${detalleTexto} | ${fmtMoney(calc.subtotal)} |\n`;
-        for (const d of (calc.detalleLista||[])){
-          const cur = porRemitente[d.nombre] || {cantidad:0, subtotal:0};
-          cur.cantidad += d.cantidad; cur.subtotal += d.cantidad*d.tarifa;
-          porRemitente[d.nombre] = cur;
-        }
-      }
-      out += `| **TOTAL ${ent.nombre}** | | | **${fmtMoney(subtotalEnt)}** |\n\n`;
-      if (Object.keys(porRemitente).length){
-        out += `### ${ent.nombre} — detalle por remitente\n\n| Remitente | Cantidad | Subtotal |\n|---|---|---|\n`;
-        for (const [nombre, v] of Object.entries(porRemitente).sort((a,b)=>b[1].subtotal-a[1].subtotal)){
-          out += `| ${nombre} | ${v.cantidad} | ${fmtMoney(v.subtotal)} |\n`;
-        }
-        out += `\n`;
-      }
-      totalFacturable += subtotalEnt;
-      resumenFilas.push([ent.nombre, subtotalEnt]);
-
-    } else {
-      out += `| Fecha | Inicio | Fin | Horas |\n|---|---|---|---|\n`;
-      let horas = 0;
-      for (const t of turnos){
-        const calc = calcularTurno(t);
-        horas += calc.horas;
-        out += `| ${t.fecha} | ${t.inicio} | ${t.fin} | ${fmtHours(calc.horas)} |\n`;
-      }
-      out += `| **TOTAL HORAS ${ent.nombre}** | | | **${fmtHours(horas)}** |\n\n`;
-    }
-  }
-
-  out += `## Resumen general\n\n| Entidad | Subtotal |\n|---|---|\n`;
-  for (const [nombre, subtotal] of resumenFilas) out += `| ${nombre} | ${fmtMoney(subtotal)} |\n`;
-  out += `| **TOTAL** | **${fmtMoney(totalFacturable)}** |\n`;
-
-  return out;
-}
-
 function toCsv(){
   const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
   const list = TURNOS.filter(t => t.fecha.slice(0,7) === month)
@@ -1323,9 +1248,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
     renderCalendar();
   });
 
-  document.getElementById("btn-export-md").addEventListener("click", ()=>{
-    document.getElementById("export-output").textContent = buildCloseOfMonth();
-  });
   document.getElementById("btn-export-csv").addEventListener("click", ()=>{
     const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
     downloadFile(`cierre-mes-${month}.csv`, toCsv(), "text/csv;charset=utf-8;");
