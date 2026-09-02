@@ -33,71 +33,46 @@
   <div class="header-row">
     <div>
       <h1>🩺 Agenda Laura</h1>
-      <p class="subtitle">Asistente Clínico Operativo y Financiero — CES · AUNA · NOEL</p>
+      <p class="subtitle">Asistente Clínico Operativo y Financiero</p>
     </div>
     <div class="header-actions">
       <span id="user-email-label" class="user-email"></span>
-      <button id="btn-open-settings" class="btn secondary">⚙️ Tarifas y bloqueo CES</button>
+      <button id="btn-open-settings" class="btn secondary">⚙️ Entidades y tarifas</button>
       <button id="btn-logout" class="btn secondary">Cerrar sesión</button>
     </div>
   </div>
 </header>
 
-<dialog id="dlg-settings" class="app-dialog">
+<dialog id="dlg-settings" class="app-dialog dialog-wide">
   <div class="dlg-header">
-    <h2>Tarifas y configuración</h2>
+    <h2>Entidades y tarifas</h2>
     <button id="btn-close-settings" class="dlg-close" aria-label="Cerrar">✕</button>
   </div>
   <div class="dlg-body">
 
     <div class="dlg-section">
-      <h3>Maestro de tarifas</h3>
-      <p class="hint">Se aplica a los turnos ya registrados y a los nuevos.</p>
+      <h3>Entidades</h3>
+      <p class="hint">Cada entidad define cómo se valida y se factura: <strong>por franja horaria</strong> (bloque semanal fijo, sin facturación — ej. cumplimiento de contrato), <strong>por hora</strong> (tarifa ordinaria vs. nocturna/fin de semana) o <strong>por agenda</strong> (se factura por remitente/paciente — ver «Remitentes por agenda» abajo). El tipo no se puede cambiar una vez creada.</p>
       <div class="table-wrap">
-        <table id="tbl-maestro">
+        <table id="tbl-entidades">
           <thead>
-            <tr><th>Entidad</th><th>Concepto</th><th>Valor</th><th>Unidad</th></tr>
+            <tr><th>Nombre</th><th>Tipo</th><th>Configuración</th><th>Color</th><th>Activa</th></tr>
           </thead>
-          <tbody>
-            <tr>
-              <td><span class="badge AUNA">AUNA</span></td>
-              <td>Ordinario<br><small>lunes a viernes, diurno</small></td>
-              <td><input type="number" id="cfg-auna-ord" value="85000" step="1000" aria-label="Tarifa AUNA ordinario"></td>
-              <td>$ / hora</td>
-            </tr>
-            <tr>
-              <td><span class="badge AUNA">AUNA</span></td>
-              <td>Nocturno / fin de semana<br>
-                <small>rango nocturno
-                  <input type="time" id="cfg-noct-start" value="19:00" aria-label="Nocturno desde">
-                  –
-                  <input type="time" id="cfg-noct-end" value="07:00" aria-label="Nocturno hasta">
-                </small>
-              </td>
-              <td><input type="number" id="cfg-auna-noc" value="87000" step="1000" aria-label="Tarifa AUNA nocturno y fin de semana"></td>
-              <td>$ / hora</td>
-            </tr>
-            <tr>
-              <td><span class="badge NOEL">NOEL</span></td>
-              <td>Particular</td>
-              <td><input type="number" id="cfg-noel-part" value="0" step="1000" aria-label="Tarifa NOEL particular"></td>
-              <td>$ / paciente</td>
-            </tr>
-            <tr>
-              <td><span class="badge NOEL">NOEL</span></td>
-              <td>Póliza</td>
-              <td><input type="number" id="cfg-noel-pol" value="0" step="1000" aria-label="Tarifa NOEL póliza"></td>
-              <td>$ / paciente</td>
-            </tr>
-          </tbody>
+          <tbody id="entidades-rows"></tbody>
         </table>
       </div>
-      <button id="btn-save-config" class="btn primary">Guardar maestro de tarifas</button>
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button type="button" id="btn-add-entidad" class="btn secondary">+ Agregar entidad</button>
+        <button type="button" id="btn-save-entidades" class="btn primary">Guardar entidades</button>
+      </div>
     </div>
 
     <div class="dlg-section">
-      <h3>Remitentes EPS <span class="badge NOEL">NOEL</span></h3>
-      <p class="hint">Cada remitente (EPS, aseguradora o medicina prepagada) tiene su propia tarifa por paciente.</p>
+      <h3>Remitentes por agenda</h3>
+      <p class="hint">Solo para entidades «Por agenda»: cada remitente (EPS, aseguradora, medicina prepagada, Particular, Póliza...) tiene su propia tarifa por paciente/visita.</p>
+      <label>Entidad
+        <select id="rem-entidad-select"></select>
+      </label>
       <div class="table-wrap">
         <table id="tbl-remitentes">
           <thead><tr><th>Remitente</th><th>Tarifa ($/paciente)</th></tr></thead>
@@ -106,21 +81,8 @@
       </div>
       <div style="display:flex; gap:8px; margin-top:10px;">
         <button type="button" id="btn-add-remitente" class="btn secondary">+ Agregar remitente</button>
-        <button type="button" id="btn-save-remitentes" class="btn primary">Guardar remitentes EPS</button>
+        <button type="button" id="btn-save-remitentes" class="btn primary">Guardar remitentes</button>
       </div>
-    </div>
-
-    <div class="dlg-section">
-      <h3>Bloqueo CES</h3>
-      <div class="grid">
-        <label>Inicio bloqueo CES
-          <input type="date" id="cfg-ces-start" value="2026-10-01">
-        </label>
-        <label>Buffer de traslado (min) alrededor de CES
-          <input type="number" id="cfg-buffer" value="30" min="0" step="5">
-        </label>
-      </div>
-      <button id="btn-save-ces" class="btn secondary">Guardar bloqueo CES</button>
     </div>
 
   </div>
@@ -136,11 +98,7 @@
     <div class="dlg-section">
       <div class="grid">
         <label>Entidad de los turnos a importar
-          <select id="imp-entidad">
-            <option value="CES">CES</option>
-            <option value="AUNA">AUNA</option>
-            <option value="NOEL">NOEL</option>
-          </select>
+          <select id="imp-entidad"></select>
         </label>
         <label>O sube un archivo (.csv / .xlsx)
           <input type="file" id="imp-file" accept=".csv,.xlsx,.xls">
@@ -178,11 +136,7 @@
     </div>
     <div class="grid">
       <label>Entidad
-        <select id="f-entidad">
-          <option value="CES">CES</option>
-          <option value="AUNA">AUNA</option>
-          <option value="NOEL">NOEL</option>
-        </select>
+        <select id="f-entidad"></select>
       </label>
       <label>Fecha
         <input type="date" id="f-fecha">
@@ -193,26 +147,15 @@
       <label>Hora fin
         <input type="time" id="f-fin">
       </label>
-      <label id="f-sede-wrap">Sede (AUNA)
-        <select id="f-sede">
-          <option value="La 80">La 80</option>
-          <option value="Sur">Sur</option>
-        </select>
+      <label id="f-sede-wrap">Sede (opcional)
+        <input type="text" id="f-sede" placeholder="Ej. La 80, Sur...">
       </label>
     </div>
 
-    <div id="noel-fields" hidden>
-      <div class="grid">
-        <label>N° Pacientes Particular
-          <input type="number" id="f-noel-part" value="0" min="0">
-        </label>
-        <label>N° Pacientes Póliza
-          <input type="number" id="f-noel-pol" value="0" min="0">
-        </label>
-      </div>
-      <label class="eps-label">Pacientes EPS por remitente</label>
-      <div id="f-noel-eps-rows"></div>
-      <button type="button" id="btn-noel-eps-add" class="btn secondary btn-sm">+ Agregar remitente EPS</button>
+    <div id="agenda-fields" hidden>
+      <label class="eps-label">Pacientes/visitas por remitente</label>
+      <div id="f-agenda-rows"></div>
+      <button type="button" id="btn-agenda-add" class="btn secondary btn-sm">+ Agregar remitente</button>
     </div>
 
     <button id="btn-add-turno" class="btn primary">Registrar turno</button>
@@ -229,7 +172,7 @@
         <button type="button" id="cal-today" class="btn secondary">Hoy</button>
       </div>
     </div>
-    <p class="hint">La franja violeta arriba marca los días con bloqueo CES. Clic en un turno para eliminarlo.</p>
+    <p class="hint">La franja de color arriba marca los días con un bloqueo fijo. Clic en un turno para eliminarlo.</p>
     <div class="cal-weekdays">
       <div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div><div>Dom</div>
     </div>
@@ -273,7 +216,7 @@
         <button id="btn-export-xlsx" class="btn primary">Descargar Excel (.xlsx)</button>
       </div>
     </div>
-    <p class="hint">Excel incluye: Fecha, Inicio, Fin, Entidad, Detalle y Subtotal, del mes filtrado en la agenda.</p>
+    <p class="hint">CSV y Excel incluyen: Fecha, Entidad, Sede, Inicio, Fin, Horas, Detalle y Subtotal, del mes filtrado en la agenda.</p>
     <pre id="export-output"></pre>
   </section>
 
