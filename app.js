@@ -98,11 +98,12 @@ function cesBlocksInRange(start, end){
 }
 
 // ---------- Validación de choques ----------
-function validarTurno(nuevo, excludeId){
+function validarTurno(nuevo, excludeId, extra){
   const {start, end} = turnoInterval(nuevo);
+  const candidatos = extra && extra.length ? TURNOS.concat(extra) : TURNOS;
 
-  // 1. Choque contra otros turnos ya registrados
-  for (const t of TURNOS){
+  // 1. Choque contra otros turnos ya registrados (incluyendo un lote de importación en curso)
+  for (const t of candidatos){
     if (excludeId && t.id === excludeId) continue;
     const iv = turnoInterval(t);
     if (overlaps(start, end, iv.start, iv.end)){
@@ -419,6 +420,169 @@ function handleAddTurno(){
   renderAll();
 }
 
+// ---------- Importador masivo ----------
+let importPreviewRows = [];
+
+const IMPORT_FORMATS = {
+  CES:  { cols:["Fecha","Inicio","Fin"], hint:"Columnas: Fecha (AAAA-MM-DD o DD/MM/AAAA), Hora inicio (HH:MM), Hora fin (HH:MM).",
+          placeholder:"2026-10-05\t07:00\t11:00\n2026-10-06\t07:00\t10:30" },
+  AUNA: { cols:["Fecha","Inicio","Fin","Sede"], hint:"Columnas: Fecha, Hora inicio, Hora fin, Sede (La 80 / Sur).",
+          placeholder:"2026-09-05\t08:00\t16:00\tLa 80\n2026-09-08\t18:00\t22:00\tSur" },
+  NOEL: { cols:["Fecha","Inicio","Fin","Particular","Póliza","EPS"], hint:"Columnas: Fecha, Hora inicio, Hora fin, N° Particular, N° Póliza, N° EPS.",
+          placeholder:"2026-09-03\t08:00\t12:00\t2\t1\t4\n2026-09-15\t14:00\t18:00\t1\t3\t2" },
+};
+
+function normalizeImportDate(raw){
+  if (!raw) return null;
+  const s = String(raw).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  let y, mo, d;
+  if (m){ y = +m[1]; mo = +m[2]; d = +m[3]; }
+  else {
+    m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (!m) return null;
+    d = +m[1]; mo = +m[2]; y = +m[3];
+  }
+  const iso = `${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  const check = new Date(iso + "T00:00:00");
+  if (check.getFullYear() !== y || check.getMonth()+1 !== mo || check.getDate() !== d) return null;
+  return iso;
+}
+function normalizeImportTime(raw){
+  if (!raw) return null;
+  const s = String(raw).trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = +m[1], mi = +m[2];
+  if (h < 0 || h > 23 || mi < 0 || mi > 59) return null;
+  return `${String(h).padStart(2,"0")}:${m[2]}`;
+}
+function parseImportText(text){
+  return text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0).map(line=>{
+    const sep = line.includes("\t") ? "\t" : ",";
+    return line.split(sep).map(c=>c.trim().replace(/^"(.*)"$/,"$1"));
+  });
+}
+
+function updateImportFormatHint(){
+  const entidad = document.getElementById("imp-entidad").value;
+  const fmt = IMPORT_FORMATS[entidad];
+  document.getElementById("imp-format-hint").textContent = fmt.hint;
+  document.getElementById("imp-textarea").placeholder = fmt.placeholder;
+}
+
+function handleImportFile(file){
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")){
+    if (typeof XLSX === "undefined"){
+      showAlert("No se pudo leer el archivo: la librería de Excel no cargó (sin conexión). Pega los datos manualmente en el cuadro de texto.", "error");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      const wb = XLSX.read(e.target.result, {type:"array"});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:false, blankrows:false});
+      document.getElementById("imp-textarea").value = rows.map(r=>r.join("\t")).join("\n");
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    const reader = new FileReader();
+    reader.onload = (e)=>{ document.getElementById("imp-textarea").value = e.target.result; };
+    reader.readAsText(file);
+  }
+}
+
+function buildImportPreview(){
+  const entidad = document.getElementById("imp-entidad").value;
+  const raw = document.getElementById("imp-textarea").value;
+  let rows = parseImportText(raw);
+
+  if (rows.length === 0){
+    showAlert("No hay filas para procesar. Pega o sube los datos primero.", "error");
+    return;
+  }
+  if (normalizeImportDate(rows[0][0]) === null) rows = rows.slice(1); // descarta fila de encabezado si la hay
+
+  const aceptadosLote = [];
+  const results = [];
+
+  rows.forEach((cols, idx)=>{
+    const fecha = normalizeImportDate(cols[0]);
+    const inicio = normalizeImportTime(cols[1]);
+    const fin = normalizeImportTime(cols[2]);
+
+    if (!fecha || !inicio || !fin){
+      results.push({idx, cols, status:"invalid", message:"Fecha u hora con formato inválido."});
+      return;
+    }
+
+    const nuevo = { id:`imp-${Date.now()}-${idx}`, entidad, fecha, inicio, fin };
+    if (entidad === "AUNA"){
+      const s = (cols[3]||"").toLowerCase();
+      nuevo.sede = s.includes("sur") ? "Sur" : "La 80";
+    }
+    if (entidad === "NOEL"){
+      nuevo.noelPart = Number(cols[3]) || 0;
+      nuevo.noelPol  = Number(cols[4]) || 0;
+      nuevo.noelEps  = Number(cols[5]) || 0;
+    }
+
+    const check = validarTurno(nuevo, null, aceptadosLote);
+    if (!check.ok){
+      results.push({idx, cols, turno:nuevo, status:"conflict", message:check.motivo});
+      return;
+    }
+    aceptadosLote.push(nuevo);
+    results.push({idx, cols, turno:nuevo, status:"ok", message:"Se importará"});
+  });
+
+  importPreviewRows = results;
+  renderImportPreview(entidad);
+}
+
+function renderImportPreview(entidad){
+  const fmt = IMPORT_FORMATS[entidad];
+  const okCount = importPreviewRows.filter(r=>r.status==="ok").length;
+  const conflictCount = importPreviewRows.filter(r=>r.status==="conflict").length;
+  const invalidCount = importPreviewRows.filter(r=>r.status==="invalid").length;
+
+  const headCols = fmt.cols.map(c=>`<th>${c}</th>`).join("");
+  const bodyRows = importPreviewRows.map(r=>{
+    const cells = fmt.cols.map((_,i)=> `<td>${r.cols[i] ?? ""}</td>`).join("");
+    const badgeClass = r.status;
+    const badgeText = r.status === "ok" ? "✓ Se importará" : r.status === "conflict" ? "⚠ Choque" : "✕ Inválido";
+    return `<tr><td>${r.idx+1}</td>${cells}<td><span class="imp-status ${badgeClass}" title="${(r.message||"").replace(/"/g,"&quot;")}">${badgeText}</span></td></tr>`;
+  }).join("");
+
+  document.getElementById("imp-preview-table").innerHTML = `
+    <thead><tr><th>#</th>${headCols}<th>Estado</th></tr></thead>
+    <tbody>${bodyRows}</tbody>
+  `;
+  const wrap = document.getElementById("imp-preview-wrap");
+  wrap.hidden = false;
+  wrap.querySelector("h3").textContent =
+    `Resultado: ${okCount} listos para importar · ${conflictCount} con choque · ${invalidCount} con formato inválido`;
+
+  document.getElementById("btn-imp-confirm").disabled = okCount === 0;
+}
+
+function commitImport(){
+  const okRows = importPreviewRows.filter(r=>r.status === "ok");
+  if (okRows.length === 0) return;
+  for (const r of okRows) TURNOS.push(r.turno);
+  saveTurnos();
+  const skipped = importPreviewRows.length - okRows.length;
+  showAlert(`Importación completa: ${okRows.length} turno(s) agregado(s)${skipped ? `, ${skipped} omitido(s) por choque o formato` : ""}.`, "ok");
+  renderAll();
+
+  importPreviewRows = [];
+  document.getElementById("imp-textarea").value = "";
+  document.getElementById("imp-preview-wrap").hidden = true;
+  document.getElementById("btn-imp-confirm").disabled = true;
+  document.getElementById("dlg-import").close();
+}
+
 // ---------- Exportación cierre de mes ----------
 function buildCloseOfMonth(){
   const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
@@ -585,6 +749,25 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
   document.getElementById("btn-add-turno").addEventListener("click", handleAddTurno);
   document.getElementById("filter-month").addEventListener("change", renderAll);
+
+  const dlgImport = document.getElementById("dlg-import");
+  document.getElementById("btn-open-import").addEventListener("click", ()=>{
+    updateImportFormatHint();
+    dlgImport.showModal();
+  });
+  document.getElementById("btn-close-import").addEventListener("click", ()=> dlgImport.close());
+  dlgImport.addEventListener("click", (e)=>{ if (e.target === dlgImport) dlgImport.close(); });
+  document.getElementById("imp-entidad").addEventListener("change", ()=>{
+    updateImportFormatHint();
+    importPreviewRows = [];
+    document.getElementById("imp-preview-wrap").hidden = true;
+    document.getElementById("btn-imp-confirm").disabled = true;
+  });
+  document.getElementById("imp-file").addEventListener("change", (e)=>{
+    if (e.target.files[0]) handleImportFile(e.target.files[0]);
+  });
+  document.getElementById("btn-imp-preview").addEventListener("click", buildImportPreview);
+  document.getElementById("btn-imp-confirm").addEventListener("click", commitImport);
 
   document.getElementById("cal-prev").addEventListener("click", ()=> shiftCalendarMonth(-1));
   document.getElementById("cal-next").addEventListener("click", ()=> shiftCalendarMonth(1));

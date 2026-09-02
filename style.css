@@ -83,24 +83,45 @@ tbody tr:hover{background:#fafbfd;}
 }
 
 /* ---------- settings dialog ---------- */
-dialog#dlg-settings{
+dialog.app-dialog{
   border:none; border-radius:14px; padding:0; margin:auto; width:min(640px,92vw); max-height:86vh;
   background:var(--card); color:var(--ink); box-shadow:0 20px 50px rgba(0,0,0,.25);
 }
-dialog#dlg-settings::backdrop{background:rgba(15,23,42,.55);}
-dialog#dlg-settings .dlg-header{
+dialog.app-dialog::backdrop{background:rgba(15,23,42,.55);}
+dialog.app-dialog .dlg-header{
   display:flex; align-items:center; justify-content:space-between; gap:12px;
   padding:16px 20px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--card); border-radius:14px 14px 0 0;
 }
-dialog#dlg-settings .dlg-header h2{margin:0; font-size:1.05rem;}
-dialog#dlg-settings .dlg-close{
+dialog.app-dialog .dlg-header h2{margin:0; font-size:1.05rem;}
+dialog.app-dialog .dlg-close{
   background:transparent; border:none; font-size:1rem; line-height:1; cursor:pointer; color:var(--muted);
   padding:6px 10px; border-radius:8px;
 }
-dialog#dlg-settings .dlg-close:hover{background:#eef1f6;}
-dialog#dlg-settings .dlg-body{padding:18px 20px 22px; display:flex; flex-direction:column; gap:24px; overflow-y:auto;}
-dialog#dlg-settings .dlg-section h3{margin:0 0 4px; font-size:.95rem;}
-dialog#dlg-settings .hint{margin:0 0 10px; display:block;}
+dialog.app-dialog .dlg-close:hover{background:#eef1f6;}
+dialog.app-dialog .dlg-body{padding:18px 20px 22px; display:flex; flex-direction:column; gap:24px; overflow-y:auto;}
+dialog.app-dialog .dlg-section h3{margin:0 0 4px; font-size:.95rem;}
+dialog.app-dialog .hint{margin:0 0 10px; display:block;}
+dialog.dialog-wide{width:min(760px,94vw);}
+
+/* ---------- importador masivo ---------- */
+.imp-textarea{
+  width:100%; min-height:130px; resize:vertical; font-family:monospace; font-size:.8rem;
+  padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink);
+  line-height:1.5;
+}
+.tbl-import{width:100%; border-collapse:collapse; font-size:.8rem;}
+.tbl-import th{
+  background:#f5f7fa; text-align:left; padding:7px 10px; font-size:.7rem; font-weight:700;
+  letter-spacing:.03em; text-transform:uppercase; color:var(--muted); border-bottom:1px solid var(--line); white-space:nowrap;
+}
+.tbl-import td{padding:7px 10px; border-bottom:1px solid var(--line); white-space:nowrap;}
+.tbl-import tr:last-child td{border-bottom:none;}
+.imp-status{
+  display:inline-flex; align-items:center; gap:5px; padding:2px 9px; border-radius:999px; font-size:.72rem; font-weight:700;
+}
+.imp-status.ok{background:var(--ok-bg); color:var(--ok);}
+.imp-status.conflict{background:var(--danger-bg); color:var(--danger);}
+.imp-status.invalid{background:#eef1f6; color:var(--muted);}
 
 /* ---------- calendario mensual ---------- */
 .cal-nav{display:flex; align-items:center; gap:8px;}

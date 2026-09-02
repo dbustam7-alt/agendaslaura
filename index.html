@@ -18,7 +18,7 @@
   </div>
 </header>
 
-<dialog id="dlg-settings">
+<dialog id="dlg-settings" class="app-dialog">
   <div class="dlg-header">
     <h2>Tarifas y configuración</h2>
     <button id="btn-close-settings" class="dlg-close" aria-label="Cerrar">✕</button>
@@ -92,6 +92,44 @@
   </div>
 </dialog>
 
+<dialog id="dlg-import" class="app-dialog dialog-wide">
+  <div class="dlg-header">
+    <h2>Importar turnos masivo</h2>
+    <button id="btn-close-import" class="dlg-close" aria-label="Cerrar">✕</button>
+  </div>
+  <div class="dlg-body">
+
+    <div class="dlg-section">
+      <div class="grid">
+        <label>Entidad de los turnos a importar
+          <select id="imp-entidad">
+            <option value="CES">CES</option>
+            <option value="AUNA">AUNA</option>
+            <option value="NOEL">NOEL</option>
+          </select>
+        </label>
+        <label>O sube un archivo (.csv / .xlsx)
+          <input type="file" id="imp-file" accept=".csv,.xlsx,.xls">
+        </label>
+      </div>
+      <p class="hint" id="imp-format-hint" style="margin:0 0 8px;"></p>
+      <textarea id="imp-textarea" class="imp-textarea" rows="6" spellcheck="false"></textarea>
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button type="button" id="btn-imp-preview" class="btn secondary">Vista previa</button>
+        <button type="button" id="btn-imp-confirm" class="btn primary" disabled>Confirmar importación</button>
+      </div>
+    </div>
+
+    <div class="dlg-section" id="imp-preview-wrap" hidden>
+      <h3>Resultado de la validación</h3>
+      <div class="table-wrap">
+        <table class="tbl-import" id="imp-preview-table"></table>
+      </div>
+    </div>
+
+  </div>
+</dialog>
+
 <main>
 
   <!-- ALERTAS -->
@@ -99,7 +137,10 @@
 
   <!-- NUEVO TURNO -->
   <section class="card">
-    <h2>➕ Registrar turno</h2>
+    <div class="card-header">
+      <h2>➕ Registrar turno</h2>
+      <button type="button" id="btn-open-import" class="btn secondary">📥 Importar masivo</button>
+    </div>
     <div class="grid">
       <label>Entidad
         <select id="f-entidad">
