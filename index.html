@@ -14,9 +14,63 @@
 
 <main>
 
-  <!-- CONFIGURACIÓN -->
+  <!-- MAESTRO DE TARIFAS -->
+  <section class="card" id="maestro-card">
+    <div class="card-header">
+      <h2>💲 Maestro de tarifas</h2>
+      <span class="hint">Se aplica a los turnos ya registrados y a los nuevos.</span>
+    </div>
+    <div class="table-wrap">
+      <table id="tbl-maestro">
+        <thead>
+          <tr><th>Entidad</th><th>Concepto</th><th>Valor</th><th>Unidad</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge AUNA">AUNA</span></td>
+            <td>Ordinario<br><small>lunes a viernes, diurno</small></td>
+            <td><input type="number" id="cfg-auna-ord" value="85000" step="1000" aria-label="Tarifa AUNA ordinario"></td>
+            <td>$ / hora</td>
+          </tr>
+          <tr>
+            <td><span class="badge AUNA">AUNA</span></td>
+            <td>Nocturno / fin de semana<br>
+              <small>rango nocturno
+                <input type="time" id="cfg-noct-start" value="19:00" aria-label="Nocturno desde">
+                –
+                <input type="time" id="cfg-noct-end" value="07:00" aria-label="Nocturno hasta">
+              </small>
+            </td>
+            <td><input type="number" id="cfg-auna-noc" value="87000" step="1000" aria-label="Tarifa AUNA nocturno y fin de semana"></td>
+            <td>$ / hora</td>
+          </tr>
+          <tr>
+            <td><span class="badge NOEL">NOEL</span></td>
+            <td>Particular</td>
+            <td><input type="number" id="cfg-noel-part" value="0" step="1000" aria-label="Tarifa NOEL particular"></td>
+            <td>$ / paciente</td>
+          </tr>
+          <tr>
+            <td><span class="badge NOEL">NOEL</span></td>
+            <td>Póliza</td>
+            <td><input type="number" id="cfg-noel-pol" value="0" step="1000" aria-label="Tarifa NOEL póliza"></td>
+            <td>$ / paciente</td>
+          </tr>
+          <tr>
+            <td><span class="badge NOEL">NOEL</span></td>
+            <td>EPS</td>
+            <td><input type="number" id="cfg-noel-eps" value="0" step="1000" aria-label="Tarifa NOEL EPS"></td>
+            <td>$ / paciente</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <button id="btn-save-config" class="btn primary">Guardar maestro de tarifas</button>
+  </section>
+
+  <!-- CONFIGURACIÓN OPERATIVA -->
   <section class="card" id="config-card">
-    <h2>⚙️ Configuración</h2>
+    <h2>⚙️ Configuración operativa · bloqueo CES</h2>
     <div class="grid">
       <label>Inicio bloqueo CES
         <input type="date" id="cfg-ces-start" value="2026-10-01">
@@ -24,29 +78,8 @@
       <label>Buffer de traslado (min) alrededor de CES
         <input type="number" id="cfg-buffer" value="30" min="0" step="5">
       </label>
-      <label>Rango nocturno AUNA — desde
-        <input type="time" id="cfg-noct-start" value="19:00">
-      </label>
-      <label>Rango nocturno AUNA — hasta
-        <input type="time" id="cfg-noct-end" value="07:00">
-      </label>
-      <label>Tarifa AUNA ordinario ($/h)
-        <input type="number" id="cfg-auna-ord" value="85000" step="1000">
-      </label>
-      <label>Tarifa AUNA nocturno/fin de semana ($/h)
-        <input type="number" id="cfg-auna-noc" value="87000" step="1000">
-      </label>
-      <label>Tarifa NOEL Particular ($/pac.)
-        <input type="number" id="cfg-noel-part" value="0" step="1000">
-      </label>
-      <label>Tarifa NOEL Póliza ($/pac.)
-        <input type="number" id="cfg-noel-pol" value="0" step="1000">
-      </label>
-      <label>Tarifa NOEL EPS ($/pac.)
-        <input type="number" id="cfg-noel-eps" value="0" step="1000">
-      </label>
     </div>
-    <button id="btn-save-config" class="btn secondary">Guardar configuración</button>
+    <button id="btn-save-ces" class="btn secondary">Guardar</button>
   </section>
 
   <!-- ALERTAS -->

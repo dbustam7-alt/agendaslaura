@@ -470,7 +470,12 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
   document.getElementById("btn-save-config").addEventListener("click", ()=>{
     readConfigFromForm();
-    showAlert("Configuración guardada.", "ok");
+    showAlert("Maestro de tarifas guardado.", "ok");
+    renderAll();
+  });
+  document.getElementById("btn-save-ces").addEventListener("click", ()=>{
+    readConfigFromForm();
+    showAlert("Configuración operativa (bloqueo CES) guardada.", "ok");
     renderAll();
   });
 

@@ -59,6 +59,12 @@ tbody tr:hover{background:#fafbfd;}
 .badge.AUNA{background:var(--auna);}
 .badge.NOEL{background:var(--noel);}
 
+#tbl-maestro td:nth-child(2){min-width:200px;}
+#tbl-maestro small{display:block; color:var(--muted); font-weight:400; margin-top:2px;}
+#tbl-maestro input[type=number]{width:110px; text-align:right;}
+#tbl-maestro input[type=time]{font-size:.78rem; padding:4px 6px;}
+.hint{color:var(--muted); font-size:.8rem; font-weight:400;}
+
 .resumen-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px;}
 .resumen-item{
   border:1px solid var(--line); border-radius:10px; padding:14px; background:#fafbfd;
