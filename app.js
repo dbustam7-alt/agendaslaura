@@ -55,6 +55,15 @@ async function updateEntidadDB(id, e){
   const { error } = await sb.from("entidades").update({ nombre:e.nombre, color:e.color, config:e.config, activo:e.activo }).eq("id", id);
   if (error) throw error;
 }
+async function deleteEntidadDB(id){
+  // La base de datos rechaza el borrado (llave foránea) si la entidad todavía
+  // tiene turnos o remitentes asociados — eso es intencional, ver isForeignKeyError().
+  const { error } = await sb.from("entidades").delete().eq("id", id);
+  if (error) throw error;
+}
+function isForeignKeyError(e){
+  return !!e && (e.code === "23503" || /foreign key|violates.*constraint/i.test(e.message || ""));
+}
 
 // ---------- Remitentes (entidades tipo "por_agenda": EPS, aseguradoras, Particular, Póliza...) ----------
 async function fetchRemitentes(){
@@ -715,6 +724,7 @@ function renderEntidadesMaestro(){
       <td>${buildEntidadConfigFields(e.tipo, e.config)}</td>
       <td><input type="color" class="ent-color" value="${e.color}"></td>
       <td class="center"><input type="checkbox" class="ent-activo" ${e.activo ? "checked" : ""}></td>
+      <td class="center"><button type="button" class="btn ghost-icon ent-row-remove" aria-label="Eliminar entidad" title="Eliminar entidad">✕</button></td>
     </tr>
   `).join("");
 }
@@ -734,6 +744,7 @@ function addEntidadMaestroRow(){
     <td class="ent-config-cell">${buildEntidadConfigFields("franja_fija")}</td>
     <td><input type="color" class="ent-color" value="#2563eb"></td>
     <td class="center"><input type="checkbox" class="ent-activo" checked></td>
+    <td class="center"><button type="button" class="btn ghost-icon ent-row-remove" aria-label="Quitar fila" title="Quitar fila (no guardada)">✕</button></td>
   `;
   tr.querySelector(".ent-tipo-select").addEventListener("change", (e)=>{
     tr.dataset.tipo = e.target.value;
@@ -764,6 +775,27 @@ async function saveEntidadesMaestro(){
     renderAll();
   }catch(e){
     showAlert("Error guardando entidades: " + e.message, "error");
+  }
+}
+async function handleDeleteEntidad(id){
+  const ent = getEntidad(id);
+  const nombre = ent ? ent.nombre : "esta entidad";
+  if (!confirm(`¿Eliminar definitivamente la entidad "${nombre}"?\n\nSolo funciona si no tiene turnos ni remitentes registrados. Si los tiene, desactívala en vez de eliminarla (destilda "Activa" y guarda).`)) return;
+  try{
+    await deleteEntidadDB(id);
+    ENTIDADES = ENTIDADES.filter(e=>e.id !== id);
+    renderEntidadesMaestro();
+    renderRemitenteEntidadSelector();
+    renderEntidadFormOptions();
+    renderImportEntidadOptions();
+    showAlert(`Entidad "${nombre}" eliminada.`, "ok");
+    renderAll();
+  }catch(e){
+    if (isForeignKeyError(e)){
+      showAlert(`No se puede eliminar "${nombre}": todavía tiene turnos o remitentes asociados. Desactívala (destilda "Activa" y guarda) en vez de eliminarla.`, "error");
+    } else {
+      showAlert(`Error eliminando "${nombre}": ` + e.message, "error");
+    }
   }
 }
 
@@ -1241,6 +1273,14 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
   document.getElementById("btn-add-entidad").addEventListener("click", addEntidadMaestroRow);
   document.getElementById("btn-save-entidades").addEventListener("click", saveEntidadesMaestro);
+  document.getElementById("entidades-rows").addEventListener("click", (e)=>{
+    const btn = e.target.closest(".ent-row-remove");
+    if (!btn) return;
+    const tr = btn.closest("tr");
+    const id = tr.dataset.id;
+    if (id) handleDeleteEntidad(id);
+    else tr.remove(); // fila nueva todavía no guardada: solo se quita del formulario
+  });
 
   document.getElementById("rem-entidad-select").addEventListener("change", renderRemitentesMaestro);
   document.getElementById("btn-add-remitente").addEventListener("click", addRemitenteMaestroRow);
