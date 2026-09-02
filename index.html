@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agenda Laura — Turnos y Facturación</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>🩺 Agenda Laura</h1>
+  <p class="subtitle">Asistente Clínico Operativo y Financiero — CES · AUNA · NOEL</p>
+</header>
+
+<main>
+
+  <!-- CONFIGURACIÓN -->
+  <section class="card" id="config-card">
+    <h2>⚙️ Configuración</h2>
+    <div class="grid">
+      <label>Inicio bloqueo CES
+        <input type="date" id="cfg-ces-start" value="2026-10-01">
+      </label>
+      <label>Buffer de traslado (min) alrededor de CES
+        <input type="number" id="cfg-buffer" value="30" min="0" step="5">
+      </label>
+      <label>Rango nocturno AUNA — desde
+        <input type="time" id="cfg-noct-start" value="19:00">
+      </label>
+      <label>Rango nocturno AUNA — hasta
+        <input type="time" id="cfg-noct-end" value="07:00">
+      </label>
+      <label>Tarifa AUNA ordinario ($/h)
+        <input type="number" id="cfg-auna-ord" value="85000" step="1000">
+      </label>
+      <label>Tarifa AUNA nocturno/fin de semana ($/h)
+        <input type="number" id="cfg-auna-noc" value="87000" step="1000">
+      </label>
+      <label>Tarifa NOEL Particular ($/pac.)
+        <input type="number" id="cfg-noel-part" value="0" step="1000">
+      </label>
+      <label>Tarifa NOEL Póliza ($/pac.)
+        <input type="number" id="cfg-noel-pol" value="0" step="1000">
+      </label>
+      <label>Tarifa NOEL EPS ($/pac.)
+        <input type="number" id="cfg-noel-eps" value="0" step="1000">
+      </label>
+    </div>
+    <button id="btn-save-config" class="btn secondary">Guardar configuración</button>
+  </section>
+
+  <!-- ALERTAS -->
+  <div id="alert-box" class="alert" hidden></div>
+
+  <!-- NUEVO TURNO -->
+  <section class="card">
+    <h2>➕ Registrar turno</h2>
+    <div class="grid">
+      <label>Entidad
+        <select id="f-entidad">
+          <option value="CES">CES</option>
+          <option value="AUNA">AUNA</option>
+          <option value="NOEL">NOEL</option>
+        </select>
+      </label>
+      <label>Fecha
+        <input type="date" id="f-fecha">
+      </label>
+      <label>Hora inicio
+        <input type="time" id="f-inicio">
+      </label>
+      <label>Hora fin
+        <input type="time" id="f-fin">
+      </label>
+      <label id="f-sede-wrap">Sede (AUNA)
+        <select id="f-sede">
+          <option value="La 80">La 80</option>
+          <option value="Sur">Sur</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="grid" id="noel-fields" hidden>
+      <label>N° Pacientes Particular
+        <input type="number" id="f-noel-part" value="0" min="0">
+      </label>
+      <label>N° Pacientes Póliza
+        <input type="number" id="f-noel-pol" value="0" min="0">
+      </label>
+      <label>N° Pacientes EPS
+        <input type="number" id="f-noel-eps" value="0" min="0">
+      </label>
+    </div>
+
+    <button id="btn-add-turno" class="btn primary">Registrar turno</button>
+  </section>
+
+  <!-- AGENDA CONSOLIDADA -->
+  <section class="card">
+    <div class="card-header">
+      <h2>📅 Agenda consolidada</h2>
+      <label class="inline">Mes
+        <input type="month" id="filter-month">
+      </label>
+    </div>
+    <div class="table-wrap">
+      <table id="tbl-agenda">
+        <thead>
+          <tr>
+            <th>Fecha</th><th>Día</th><th>Entidad</th><th>Inicio</th><th>Fin</th>
+            <th>Horas</th><th>Detalle</th><th>Subtotal</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- RESUMEN FINANCIERO -->
+  <section class="card">
+    <h2>💰 Resumen financiero</h2>
+    <div id="resumen-financiero" class="resumen-grid"></div>
+  </section>
+
+  <!-- CIERRE DE MES -->
+  <section class="card">
+    <div class="card-header">
+      <h2>📤 Cierre de mes</h2>
+      <div>
+        <button id="btn-export-md" class="btn secondary">Generar Markdown</button>
+        <button id="btn-export-csv" class="btn secondary">Descargar CSV</button>
+      </div>
+    </div>
+    <pre id="export-output"></pre>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
