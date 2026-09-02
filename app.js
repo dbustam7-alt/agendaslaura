@@ -261,11 +261,11 @@ function franjaBlocksInRange(start, end){
   }
   return blocks;
 }
+function franjaEntidadesForDate(iso){
+  return ENTIDADES.filter(e => e.tipo === "franja_fija" && e.activo && franjaBlockForDate(e, iso));
+}
 function franjaEntidadForDate(iso){
-  for (const ent of ENTIDADES.filter(e => e.tipo === "franja_fija" && e.activo)){
-    if (franjaBlockForDate(ent, iso)) return ent;
-  }
-  return null;
+  return franjaEntidadesForDate(iso)[0] || null;
 }
 
 // ---------- Validación de choques ----------
@@ -513,7 +513,7 @@ function renderCalendar(){
     const iso = cursor.toISOString().slice(0,10);
     const inMonth = cursor.getMonth() === monthIndex0;
     const isToday = iso === todayISO;
-    const franjaEnt = franjaEntidadForDate(iso);
+    const franjaEnts = franjaEntidadesForDate(iso);
     const dayTurnos = byDate[iso] || [];
 
     const classes = ["cal-cell"];
@@ -521,11 +521,17 @@ function renderCalendar(){
     if (isToday) classes.push("cal-cell-today");
     let styleAttr = "";
     let titleAttr = "";
-    if (franjaEnt){
+    if (franjaEnts.length){
       classes.push("cal-cell-franja");
-      styleAttr = ` style="--franja-color:${franjaEnt.color}"`;
-      titleAttr = ` title="Bloqueo fijo ${esc(franjaEnt.nombre)}"`;
+      styleAttr = ` style="--franja-color:${franjaEnts[0].color}"`;
+      titleAttr = ` title="Bloqueo fijo ${esc(franjaEnts.map(e=>e.nombre).join(", "))}"`;
     }
+
+    // Chip informativo del bloque fijo (no es un turno registrado, no se puede eliminar).
+    const blockChips = franjaEnts.map(ent=>{
+      const cfg = ent.config || {};
+      return `<span class="cal-chip cal-chip-block" style="--chip-color:${ent.color}" title="Bloqueo fijo ${esc(ent.nombre)} ${cfg.horaInicio}–${cfg.horaFin}">${cfg.horaInicio}–${cfg.horaFin} ${esc(ent.nombre)}</span>`;
+    }).join("");
 
     const chips = dayTurnos.map(t=>{
       const calc = calcularTurno(t);
@@ -538,7 +544,7 @@ function renderCalendar(){
 
     html += `<div class="${classes.join(" ")}"${styleAttr}${titleAttr}>
       <span class="cal-daynum">${cursor.getDate()}</span>
-      <div class="cal-chips">${chips}</div>
+      <div class="cal-chips">${blockChips}${chips}</div>
     </div>`;
 
     cursor.setDate(cursor.getDate()+1);

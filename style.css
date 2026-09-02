@@ -185,6 +185,11 @@ dialog.dialog-wide{width:min(760px,94vw);}
 }
 .cal-chip:hover{text-decoration:line-through; filter:brightness(.96);}
 .cal-chip:focus-visible{outline:2px solid var(--primary); outline-offset:1px;}
+/* Chip informativo del bloque fijo (franja horaria): no es un turno registrado, no se elimina. */
+.cal-chip-block{
+  background:transparent; border:1px dashed var(--chip-color, var(--primary)); cursor:default; font-weight:700;
+}
+.cal-chip-block:hover{text-decoration:none; filter:none;}
 
 /* ---------- remitentes por agenda ---------- */
 .eps-label{display:block; margin:2px 0 6px;}
