@@ -337,7 +337,7 @@ function renderCalendar(){
     const chips = dayTurnos.map(t=>{
       const calc = calcularTurno(t);
       const title = `${t.entidad} ${t.inicio}–${t.fin} · ${calc.detalle}${calc.subtotal ? " · " + fmtMoney(calc.subtotal) : ""}`;
-      return `<button type="button" class="cal-chip ${t.entidad}" data-del="${t.id}" title="${title.replace(/"/g,"&quot;")} — clic para eliminar">${t.inicio} ${t.entidad}</button>`;
+      return `<button type="button" class="cal-chip ${t.entidad}" data-del="${t.id}" title="${title.replace(/"/g,"&quot;")} — clic para eliminar">${t.inicio}–${t.fin} ${t.entidad}</button>`;
     }).join("");
 
     html += `<div class="${classes.join(" ")}" ${isCes ? 'title="Bloqueo CES 07:00–11:00 (Lun–Jue)"' : ""}>

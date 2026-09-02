@@ -118,7 +118,7 @@ dialog#dlg-settings .hint{margin:0 0 10px; display:block;}
   display:grid; grid-template-columns:repeat(7,1fr); gap:1px; background:var(--line);
   border:1px solid var(--line); border-radius:0 0 10px 10px; overflow:hidden;
 }
-.cal-cell{background:#fff; min-height:92px; padding:5px; display:flex; flex-direction:column; gap:3px;}
+.cal-cell{background:#fff; min-height:104px; padding:5px; display:flex; flex-direction:column; gap:3px;}
 .cal-cell-out{background:var(--bg);}
 .cal-cell-out .cal-daynum{opacity:.45;}
 .cal-cell-today .cal-daynum{
@@ -130,8 +130,8 @@ dialog#dlg-settings .hint{margin:0 0 10px; display:block;}
 .cal-chips{display:flex; flex-direction:column; gap:2px;}
 .cal-chip{
   all:unset; box-sizing:border-box; cursor:pointer; display:block; width:100%;
-  font-size:.68rem; font-weight:600; line-height:1.3;
-  padding:2px 5px; border-radius:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  font-size:.64rem; font-weight:600; line-height:1.25;
+  padding:2px 5px; border-radius:5px; white-space:normal; word-break:keep-all;
 }
 .cal-chip.CES{background:var(--ces-bg); color:var(--ces);}
 .cal-chip.AUNA{background:var(--auna-bg); color:var(--auna);}
