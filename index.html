@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agenda Laura — Turnos y Facturación</title>
 <link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <header>
@@ -173,8 +174,10 @@
       <div>
         <button id="btn-export-md" class="btn secondary">Generar Markdown</button>
         <button id="btn-export-csv" class="btn secondary">Descargar CSV</button>
+        <button id="btn-export-xlsx" class="btn primary">Descargar Excel (.xlsx)</button>
       </div>
     </div>
+    <p class="hint">Excel incluye: Fecha, Inicio, Fin, Entidad, Detalle y Subtotal, del mes filtrado en la agenda.</p>
     <pre id="export-output"></pre>
   </section>
 

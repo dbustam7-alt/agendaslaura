@@ -432,6 +432,33 @@ function downloadFile(filename, content, mime){
   URL.revokeObjectURL(url);
 }
 
+function downloadExcel(){
+  if (typeof XLSX === "undefined"){
+    showAlert("No se pudo cargar la librería de Excel (sin conexión a internet). Usa CSV o Markdown mientras tanto.", "error");
+    return;
+  }
+  const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
+  const list = TURNOS.filter(t => t.fecha.slice(0,7) === month)
+    .sort((a,b)=> turnoInterval(a).start - turnoInterval(b).start);
+
+  const rows = [["Fecha","Inicio","Fin","Entidad","Detalle","Subtotal"]];
+  for (const t of list){
+    const calc = calcularTurno(t);
+    rows.push([t.fecha, t.inicio, t.fin, t.entidad, calc.detalle, Math.round(calc.subtotal || 0)]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = [{wch:12},{wch:8},{wch:8},{wch:9},{wch:42},{wch:14}];
+  for (let r = 1; r < rows.length; r++){
+    const cell = ws[XLSX.utils.encode_cell({r, c:5})];
+    if (cell) cell.z = '"$"#,##0';
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, `Cierre ${month}`);
+  XLSX.writeFile(wb, `cierre-mes-${month}.xlsx`, {cellStyles:true});
+}
+
 // ---------- Config UI ----------
 function loadConfigIntoForm(){
   document.getElementById("cfg-ces-start").value = CONFIG.cesStart;
@@ -496,6 +523,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
     downloadFile(`cierre-mes-${month}.csv`, toCsv(), "text/csv;charset=utf-8;");
   });
+  document.getElementById("btn-export-xlsx").addEventListener("click", downloadExcel);
 
   renderAll();
 });
