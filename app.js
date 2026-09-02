@@ -1,7 +1,4 @@
-/* Agenda Laura — lógica de validación, facturación y export */
-
-const LS_TURNOS = "agendaLaura.turnos";
-const LS_CONFIG = "agendaLaura.config";
+/* Agenda Laura — login, persistencia en Supabase, validación, facturación y export */
 
 const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -18,25 +15,149 @@ const DEFAULT_CONFIG = {
   noelEps: 0,
 };
 
-let CONFIG = loadConfig();
-let TURNOS = loadTurnos();
+let CONFIG = {...DEFAULT_CONFIG};
+let TURNOS = [];
 
-// ---------- Persistencia ----------
-function loadConfig(){
-  try{
-    const raw = localStorage.getItem(LS_CONFIG);
-    return raw ? {...DEFAULT_CONFIG, ...JSON.parse(raw)} : {...DEFAULT_CONFIG};
-  }catch(e){ return {...DEFAULT_CONFIG}; }
-}
-function saveConfig(){ localStorage.setItem(LS_CONFIG, JSON.stringify(CONFIG)); }
+// ---------- Conexión Supabase ----------
+// La URL y la "anon key" son públicas por diseño (Supabase las espera en el
+// cliente): por sí solas NO dan acceso a los datos. Row Level Security en el
+// proyecto exige una sesión autenticada (haber iniciado sesión) para poder
+// leer o escribir en turnos/configuracion. La "service role key" (que sí
+// se salta esa protección) nunca debe ir aquí ni a ningún código de cliente.
+const SUPABASE_URL = "https://gdntsqutspcxsaqecqgp.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdkbnRzcXV0c3BjeHNhcWVjcWdwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzNjEwNDgsImV4cCI6MjEwMzkzNzA0OH0.4m1QnFch6zJgKqLHdfDxW4kt9C65anNCEG3z5spJ6pM";
+// Si la librería de Supabase no cargó (ej. sin conexión), `sb` queda en null
+// y el arranque muestra un aviso en vez de romper toda la página en silencio.
+const sb = (window.supabase && window.supabase.createClient)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
 
-function loadTurnos(){
-  try{
-    const raw = localStorage.getItem(LS_TURNOS);
-    return raw ? JSON.parse(raw) : [];
-  }catch(e){ return []; }
+// ---------- Persistencia (Supabase) ----------
+function rowToTurno(row){
+  return {
+    id: row.id,
+    entidad: row.entidad,
+    fecha: row.fecha,
+    inicio: row.inicio.slice(0,5),
+    fin: row.fin.slice(0,5),
+    sede: row.sede || undefined,
+    noelPart: row.noel_part,
+    noelPol: row.noel_pol,
+    noelEps: row.noel_eps,
+  };
 }
-function saveTurnos(){ localStorage.setItem(LS_TURNOS, JSON.stringify(TURNOS)); }
+function turnoToRow(t){
+  return {
+    entidad: t.entidad,
+    fecha: t.fecha,
+    inicio: t.inicio,
+    fin: t.fin,
+    sede: t.entidad === "AUNA" ? (t.sede || "La 80") : null,
+    noel_part: t.entidad === "NOEL" ? (t.noelPart || 0) : 0,
+    noel_pol: t.entidad === "NOEL" ? (t.noelPol || 0) : 0,
+    noel_eps: t.entidad === "NOEL" ? (t.noelEps || 0) : 0,
+  };
+}
+async function fetchTurnos(){
+  const { data, error } = await sb.from("turnos").select("*").order("fecha").order("inicio");
+  if (error){ showAlert("Error cargando turnos: " + error.message, "error"); return []; }
+  return data.map(rowToTurno);
+}
+async function insertTurnoDB(t){
+  const { data, error } = await sb.from("turnos").insert(turnoToRow(t)).select().single();
+  if (error) throw error;
+  return rowToTurno(data);
+}
+async function insertTurnosBulkDB(list){
+  const { data, error } = await sb.from("turnos").insert(list.map(turnoToRow)).select();
+  if (error) throw error;
+  return data.map(rowToTurno);
+}
+async function deleteTurnoDB(id){
+  const { error } = await sb.from("turnos").delete().eq("id", id);
+  if (error) throw error;
+}
+
+function rowToConfig(row){
+  return {
+    cesStart: row.ces_start,
+    bufferMin: Number(row.buffer_min),
+    noctStart: row.noct_start.slice(0,5),
+    noctEnd: row.noct_end.slice(0,5),
+    aunaOrd: Number(row.auna_ord),
+    aunaNoc: Number(row.auna_noc),
+    noelPart: Number(row.noel_part),
+    noelPol: Number(row.noel_pol),
+    noelEps: Number(row.noel_eps),
+  };
+}
+function configToRow(cfg){
+  return {
+    ces_start: cfg.cesStart,
+    buffer_min: cfg.bufferMin,
+    noct_start: cfg.noctStart,
+    noct_end: cfg.noctEnd,
+    auna_ord: cfg.aunaOrd,
+    auna_noc: cfg.aunaNoc,
+    noel_part: cfg.noelPart,
+    noel_pol: cfg.noelPol,
+    noel_eps: cfg.noelEps,
+  };
+}
+async function fetchConfig(){
+  const { data, error } = await sb.from("configuracion").select("*").eq("id", 1).single();
+  if (error){ showAlert("Error cargando configuración: " + error.message, "error"); return {...DEFAULT_CONFIG}; }
+  return rowToConfig(data);
+}
+async function saveConfigDB(){
+  const { error } = await sb.from("configuracion").update(configToRow(CONFIG)).eq("id", 1);
+  if (error) throw error;
+}
+
+// ---------- Autenticación ----------
+function showLoginAlert(msg, type){
+  const box = document.getElementById("login-alert");
+  box.hidden = false;
+  box.className = "alert " + type;
+  box.textContent = (type === "error" ? "⚠️ " : "✅ ") + msg;
+}
+function showLoginScreen(){
+  document.getElementById("app-root").hidden = true;
+  document.getElementById("login-screen").hidden = false;
+  document.getElementById("login-password").value = "";
+}
+async function enterApp(){
+  document.getElementById("login-screen").hidden = true;
+  document.getElementById("app-root").hidden = false;
+
+  const { data: { user } } = await sb.auth.getUser();
+  document.getElementById("user-email-label").textContent = user ? user.email : "";
+
+  CONFIG = await fetchConfig();
+  loadConfigIntoForm();
+  TURNOS = await fetchTurnos();
+
+  document.getElementById("f-fecha").value = new Date().toISOString().slice(0,10);
+  document.getElementById("filter-month").value = new Date().toISOString().slice(0,7);
+  toggleFormFields();
+
+  renderAll();
+}
+async function handleLogin(e){
+  e.preventDefault();
+  const email = document.getElementById("login-email").value.trim();
+  const password = document.getElementById("login-password").value;
+  const btn = document.getElementById("btn-login");
+  btn.disabled = true;
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  btn.disabled = false;
+  if (error){
+    showLoginAlert("No se pudo iniciar sesión: correo o contraseña incorrectos.", "error");
+  }
+}
+async function handleLogout(){
+  await sb.auth.signOut();
+}
 
 // ---------- Helpers de fecha/hora ----------
 function parseTimeParts(hhmm){
@@ -246,10 +367,14 @@ function renderAgenda(){
     tbody.appendChild(tr);
   }
   tbody.querySelectorAll("[data-del]").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      TURNOS = TURNOS.filter(t=>t.id !== btn.dataset.del);
-      saveTurnos();
-      renderAll();
+    btn.addEventListener("click", async ()=>{
+      try{
+        await deleteTurnoDB(btn.dataset.del);
+        TURNOS = TURNOS.filter(t=>t.id !== btn.dataset.del);
+        renderAll();
+      }catch(e){
+        showAlert("Error eliminando el turno: " + e.message, "error");
+      }
     });
   });
 }
@@ -352,13 +477,16 @@ function renderCalendar(){
   const grid = document.getElementById("cal-grid");
   grid.innerHTML = html;
   grid.querySelectorAll("[data-del]").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
+    btn.addEventListener("click", async ()=>{
       const t = TURNOS.find(x=>x.id === btn.dataset.del);
       if (!t) return;
-      if (confirm(`¿Eliminar turno ${t.entidad} del ${t.fecha} (${t.inicio}–${t.fin})?`)){
+      if (!confirm(`¿Eliminar turno ${t.entidad} del ${t.fecha} (${t.inicio}–${t.fin})?`)) return;
+      try{
+        await deleteTurnoDB(btn.dataset.del);
         TURNOS = TURNOS.filter(x=>x.id !== btn.dataset.del);
-        saveTurnos();
         renderAll();
+      }catch(e){
+        showAlert("Error eliminando el turno: " + e.message, "error");
       }
     });
   });
@@ -384,7 +512,7 @@ function toggleFormFields(){
   document.getElementById("noel-fields").hidden = entidad !== "NOEL";
 }
 
-function handleAddTurno(){
+async function handleAddTurno(){
   const entidad = document.getElementById("f-entidad").value;
   const fecha = document.getElementById("f-fecha").value;
   const inicio = document.getElementById("f-inicio").value;
@@ -395,10 +523,7 @@ function handleAddTurno(){
     return;
   }
 
-  const nuevo = {
-    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
-    entidad, fecha, inicio, fin,
-  };
+  const nuevo = { entidad, fecha, inicio, fin };
   if (entidad === "AUNA"){
     nuevo.sede = document.getElementById("f-sede").value;
   }
@@ -414,10 +539,14 @@ function handleAddTurno(){
     return;
   }
 
-  TURNOS.push(nuevo);
-  saveTurnos();
-  showAlert(`Turno ${entidad} registrado sin conflictos (${fecha} ${inicio}–${fin}).`, "ok");
-  renderAll();
+  try{
+    const saved = await insertTurnoDB(nuevo);
+    TURNOS.push(saved);
+    showAlert(`Turno ${entidad} registrado sin conflictos (${fecha} ${inicio}–${fin}).`, "ok");
+    renderAll();
+  }catch(e){
+    showAlert("Error guardando el turno: " + e.message, "error");
+  }
 }
 
 // ---------- Importador masivo ----------
@@ -576,20 +705,24 @@ function renderImportPreview(entidad){
   document.getElementById("btn-imp-confirm").disabled = okCount === 0;
 }
 
-function commitImport(){
+async function commitImport(){
   const okRows = importPreviewRows.filter(r=>r.status === "ok");
   if (okRows.length === 0) return;
-  for (const r of okRows) TURNOS.push(r.turno);
-  saveTurnos();
-  const skipped = importPreviewRows.length - okRows.length;
-  showAlert(`Importación completa: ${okRows.length} turno(s) agregado(s)${skipped ? `, ${skipped} omitido(s) por choque o formato` : ""}.`, "ok");
-  renderAll();
+  try{
+    const saved = await insertTurnosBulkDB(okRows.map(r=>r.turno));
+    TURNOS.push(...saved);
+    const skipped = importPreviewRows.length - okRows.length;
+    showAlert(`Importación completa: ${saved.length} turno(s) agregado(s)${skipped ? `, ${skipped} omitido(s) por choque o formato` : ""}.`, "ok");
+    renderAll();
 
-  importPreviewRows = [];
-  document.getElementById("imp-textarea").value = "";
-  document.getElementById("imp-preview-wrap").hidden = true;
-  document.getElementById("btn-imp-confirm").disabled = true;
-  document.getElementById("dlg-import").close();
+    importPreviewRows = [];
+    document.getElementById("imp-textarea").value = "";
+    document.getElementById("imp-preview-wrap").hidden = true;
+    document.getElementById("btn-imp-confirm").disabled = true;
+    document.getElementById("dlg-import").close();
+  }catch(e){
+    showAlert("Error importando los turnos: " + e.message, "error");
+  }
 }
 
 // ---------- Exportación cierre de mes ----------
@@ -726,34 +859,50 @@ function readConfigFromForm(){
     noelPol: Number(document.getElementById("cfg-noel-pol").value || 0),
     noelEps: Number(document.getElementById("cfg-noel-eps").value || 0),
   };
-  saveConfig();
 }
 
 // ---------- Init ----------
 document.addEventListener("DOMContentLoaded", ()=>{
-  loadConfigIntoForm();
-  document.getElementById("f-fecha").value = new Date().toISOString().slice(0,10);
-  document.getElementById("filter-month").value = new Date().toISOString().slice(0,7);
+  if (!sb){
+    showLoginAlert("No se pudo cargar el sistema de acceso (revisa tu conexión a internet) y vuelve a intentar recargando la página.", "error");
+    document.getElementById("btn-login").disabled = true;
+    return;
+  }
+
+  document.getElementById("login-form").addEventListener("submit", handleLogin);
+  document.getElementById("btn-logout").addEventListener("click", handleLogout);
+  sb.auth.onAuthStateChange((event, session)=>{
+    if (session) enterApp(); else showLoginScreen();
+  });
 
   document.getElementById("f-entidad").addEventListener("change", toggleFormFields);
-  toggleFormFields();
 
   const dlgSettings = document.getElementById("dlg-settings");
   document.getElementById("btn-open-settings").addEventListener("click", ()=> dlgSettings.showModal());
   document.getElementById("btn-close-settings").addEventListener("click", ()=> dlgSettings.close());
   dlgSettings.addEventListener("click", (e)=>{ if (e.target === dlgSettings) dlgSettings.close(); });
 
-  document.getElementById("btn-save-config").addEventListener("click", ()=>{
+  document.getElementById("btn-save-config").addEventListener("click", async ()=>{
     readConfigFromForm();
-    showAlert("Maestro de tarifas guardado.", "ok");
-    renderAll();
-    dlgSettings.close();
+    try{
+      await saveConfigDB();
+      showAlert("Maestro de tarifas guardado.", "ok");
+      renderAll();
+      dlgSettings.close();
+    }catch(e){
+      showAlert("Error guardando el maestro de tarifas: " + e.message, "error");
+    }
   });
-  document.getElementById("btn-save-ces").addEventListener("click", ()=>{
+  document.getElementById("btn-save-ces").addEventListener("click", async ()=>{
     readConfigFromForm();
-    showAlert("Configuración operativa (bloqueo CES) guardada.", "ok");
-    renderAll();
-    dlgSettings.close();
+    try{
+      await saveConfigDB();
+      showAlert("Configuración operativa (bloqueo CES) guardada.", "ok");
+      renderAll();
+      dlgSettings.close();
+    }catch(e){
+      showAlert("Error guardando la configuración: " + e.message, "error");
+    }
   });
 
   document.getElementById("btn-add-turno").addEventListener("click", handleAddTurno);
@@ -794,6 +943,4 @@ document.addEventListener("DOMContentLoaded", ()=>{
     downloadFile(`cierre-mes-${month}.csv`, toCsv(), "text/csv;charset=utf-8;");
   });
   document.getElementById("btn-export-xlsx").addEventListener("click", downloadExcel);
-
-  renderAll();
 });

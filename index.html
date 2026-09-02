@@ -6,15 +6,40 @@
 <title>Agenda Laura — Turnos y Facturación</title>
 <link rel="stylesheet" href="style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <form id="login-form" class="login-card">
+    <h1>🩺 Agenda Laura</h1>
+    <p class="subtitle">Inicia sesión para ver y registrar turnos</p>
+    <div id="login-alert" class="alert" hidden></div>
+    <label>Correo electrónico
+      <input type="email" id="login-email" required autocomplete="username">
+    </label>
+    <label>Contraseña
+      <input type="password" id="login-password" required autocomplete="current-password">
+    </label>
+    <button type="submit" id="btn-login" class="btn primary">Entrar</button>
+    <p class="login-note">El acceso es solo para personas autorizadas por el consultorio. Si no tienes cuenta, pídele a quien administra la agenda que te cree una.</p>
+  </form>
+</div>
+
+<div id="app-root" hidden>
+
 <header>
   <div class="header-row">
     <div>
       <h1>🩺 Agenda Laura</h1>
       <p class="subtitle">Asistente Clínico Operativo y Financiero — CES · AUNA · NOEL</p>
     </div>
-    <button id="btn-open-settings" class="btn secondary">⚙️ Tarifas y bloqueo CES</button>
+    <div class="header-actions">
+      <span id="user-email-label" class="user-email"></span>
+      <button id="btn-open-settings" class="btn secondary">⚙️ Tarifas y bloqueo CES</button>
+      <button id="btn-logout" class="btn secondary">Cerrar sesión</button>
+    </div>
   </div>
 </header>
 
@@ -242,6 +267,8 @@
   </section>
 
 </main>
+
+</div>
 
 <script src="app.js"></script>
 </body>
