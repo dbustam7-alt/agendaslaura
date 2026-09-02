@@ -468,15 +468,22 @@ document.addEventListener("DOMContentLoaded", ()=>{
   document.getElementById("f-entidad").addEventListener("change", toggleFormFields);
   toggleFormFields();
 
+  const dlgSettings = document.getElementById("dlg-settings");
+  document.getElementById("btn-open-settings").addEventListener("click", ()=> dlgSettings.showModal());
+  document.getElementById("btn-close-settings").addEventListener("click", ()=> dlgSettings.close());
+  dlgSettings.addEventListener("click", (e)=>{ if (e.target === dlgSettings) dlgSettings.close(); });
+
   document.getElementById("btn-save-config").addEventListener("click", ()=>{
     readConfigFromForm();
     showAlert("Maestro de tarifas guardado.", "ok");
     renderAll();
+    dlgSettings.close();
   });
   document.getElementById("btn-save-ces").addEventListener("click", ()=>{
     readConfigFromForm();
     showAlert("Configuración operativa (bloqueo CES) guardada.", "ok");
     renderAll();
+    dlgSettings.close();
   });
 
   document.getElementById("btn-add-turno").addEventListener("click", handleAddTurno);
