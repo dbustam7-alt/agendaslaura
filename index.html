@@ -140,6 +140,24 @@
     <button id="btn-add-turno" class="btn primary">Registrar turno</button>
   </section>
 
+  <!-- CALENDARIO MENSUAL -->
+  <section class="card">
+    <div class="card-header">
+      <h2>🗓️ Calendario mensual</h2>
+      <div class="cal-nav">
+        <button type="button" id="cal-prev" class="btn secondary" aria-label="Mes anterior">‹</button>
+        <span id="cal-label" class="cal-label"></span>
+        <button type="button" id="cal-next" class="btn secondary" aria-label="Mes siguiente">›</button>
+        <button type="button" id="cal-today" class="btn secondary">Hoy</button>
+      </div>
+    </div>
+    <p class="hint">La franja violeta arriba marca los días con bloqueo CES. Clic en un turno para eliminarlo.</p>
+    <div class="cal-weekdays">
+      <div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div><div>Dom</div>
+    </div>
+    <div class="cal-grid" id="cal-grid"></div>
+  </section>
+
   <!-- AGENDA CONSOLIDADA -->
   <section class="card">
     <div class="card-header">

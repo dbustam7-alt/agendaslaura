@@ -4,6 +4,7 @@ const LS_TURNOS = "agendaLaura.turnos";
 const LS_CONFIG = "agendaLaura.config";
 
 const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
 const DEFAULT_CONFIG = {
   cesStart: "2026-10-01",
@@ -301,9 +302,78 @@ function renderResumen(){
   `;
 }
 
+// ---------- Calendario mensual ----------
+let calendarMonth = new Date().toISOString().slice(0,7); // "YYYY-MM"
+
+function renderCalendar(){
+  const [y, m] = calendarMonth.split("-").map(Number);
+  const monthIndex0 = m - 1;
+  document.getElementById("cal-label").textContent = `${MESES[monthIndex0]} ${y}`;
+
+  const firstOfMonth = new Date(y, monthIndex0, 1);
+  const firstWeekday = (firstOfMonth.getDay() + 6) % 7; // 0=Lun ... 6=Dom
+  const gridStart = new Date(firstOfMonth);
+  gridStart.setDate(gridStart.getDate() - firstWeekday);
+
+  const todayISO = new Date().toISOString().slice(0,10);
+  const byDate = {};
+  for (const t of TURNOS) (byDate[t.fecha] = byDate[t.fecha] || []).push(t);
+  for (const arr of Object.values(byDate)) arr.sort((a,b)=> a.inicio.localeCompare(b.inicio));
+
+  let html = "";
+  const cursor = new Date(gridStart);
+  for (let i = 0; i < 42; i++){
+    const iso = cursor.toISOString().slice(0,10);
+    const inMonth = cursor.getMonth() === monthIndex0;
+    const isToday = iso === todayISO;
+    const isCes = !!cesBlockForDate(iso);
+    const dayTurnos = byDate[iso] || [];
+
+    const classes = ["cal-cell"];
+    if (!inMonth) classes.push("cal-cell-out");
+    if (isToday) classes.push("cal-cell-today");
+    if (isCes) classes.push("cal-cell-ces");
+
+    const chips = dayTurnos.map(t=>{
+      const calc = calcularTurno(t);
+      const title = `${t.entidad} ${t.inicio}–${t.fin} · ${calc.detalle}${calc.subtotal ? " · " + fmtMoney(calc.subtotal) : ""}`;
+      return `<button type="button" class="cal-chip ${t.entidad}" data-del="${t.id}" title="${title.replace(/"/g,"&quot;")} — clic para eliminar">${t.inicio} ${t.entidad}</button>`;
+    }).join("");
+
+    html += `<div class="${classes.join(" ")}" ${isCes ? 'title="Bloqueo CES 07:00–11:00 (Lun–Jue)"' : ""}>
+      <span class="cal-daynum">${cursor.getDate()}</span>
+      <div class="cal-chips">${chips}</div>
+    </div>`;
+
+    cursor.setDate(cursor.getDate()+1);
+  }
+
+  const grid = document.getElementById("cal-grid");
+  grid.innerHTML = html;
+  grid.querySelectorAll("[data-del]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const t = TURNOS.find(x=>x.id === btn.dataset.del);
+      if (!t) return;
+      if (confirm(`¿Eliminar turno ${t.entidad} del ${t.fecha} (${t.inicio}–${t.fin})?`)){
+        TURNOS = TURNOS.filter(x=>x.id !== btn.dataset.del);
+        saveTurnos();
+        renderAll();
+      }
+    });
+  });
+}
+
+function shiftCalendarMonth(delta){
+  const [y,m] = calendarMonth.split("-").map(Number);
+  const d = new Date(y, m-1+delta, 1);
+  calendarMonth = d.toISOString().slice(0,7);
+  renderCalendar();
+}
+
 function renderAll(){
   renderAgenda();
   renderResumen();
+  renderCalendar();
 }
 
 // ---------- Formulario ----------
@@ -515,6 +585,13 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
   document.getElementById("btn-add-turno").addEventListener("click", handleAddTurno);
   document.getElementById("filter-month").addEventListener("change", renderAll);
+
+  document.getElementById("cal-prev").addEventListener("click", ()=> shiftCalendarMonth(-1));
+  document.getElementById("cal-next").addEventListener("click", ()=> shiftCalendarMonth(1));
+  document.getElementById("cal-today").addEventListener("click", ()=>{
+    calendarMonth = new Date().toISOString().slice(0,7);
+    renderCalendar();
+  });
 
   document.getElementById("btn-export-md").addEventListener("click", ()=>{
     document.getElementById("export-output").textContent = buildCloseOfMonth();
