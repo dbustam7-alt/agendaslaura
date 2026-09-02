@@ -149,9 +149,14 @@ dialog.dialog-wide{width:min(760px,94vw);}
 .cal-nav{display:flex; align-items:center; gap:8px;}
 .cal-nav .btn{padding:6px 11px; font-size:.8rem;}
 .cal-label{font-weight:700; font-size:.88rem; min-width:130px; text-align:center;}
+/* En pantallas angostas (celular), 7 columnas con chips no caben sin aplastarse:
+   en vez de deformar la grilla, este contenedor scrollea horizontalmente y
+   .cal-weekdays/.cal-grid mantienen un ancho mínimo razonable por columna. */
+.cal-scroll{overflow-x:auto;}
 .cal-weekdays{
   display:grid; grid-template-columns:repeat(7,1fr); gap:1px; background:var(--line);
   border:1px solid var(--line); border-bottom:none; border-radius:10px 10px 0 0; overflow:hidden;
+  min-width:700px;
 }
 .cal-weekdays > div{
   background:#fafbfd; padding:7px 4px; text-align:center; font-size:.68rem; font-weight:700;
@@ -160,8 +165,9 @@ dialog.dialog-wide{width:min(760px,94vw);}
 .cal-grid{
   display:grid; grid-template-columns:repeat(7,1fr); gap:1px; background:var(--line);
   border:1px solid var(--line); border-radius:0 0 10px 10px; overflow:hidden;
+  min-width:700px;
 }
-.cal-cell{background:#fff; min-height:104px; padding:5px; display:flex; flex-direction:column; gap:3px;}
+.cal-cell{background:#fff; min-height:104px; padding:5px; display:flex; flex-direction:column; gap:3px; min-width:0;}
 .cal-cell-out{background:var(--bg);}
 .cal-cell-out .cal-daynum{opacity:.45;}
 .cal-cell-today .cal-daynum{
