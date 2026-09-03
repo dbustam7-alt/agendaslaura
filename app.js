@@ -13,6 +13,7 @@ const TIPO_ICON = { franja_fija:"🟣", por_hora:"🔵", por_agenda:"🟠" };
 let ENTIDADES = [];
 let REMITENTES = [];
 let TURNOS = [];
+let editingTurnoId = null; // id del turno que se está editando en "Registrar turno", o null si es uno nuevo
 
 function esc(s){
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -146,6 +147,18 @@ async function insertTurnosBulkDB(list){
   const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).in("id", ids);
   if (err2) throw err2;
   return full.map(rowToTurno);
+}
+async function updateTurnoDB(id, t){
+  const { error } = await sb.from("turnos").update(turnoToRow(t)).eq("id", id);
+  if (error) throw error;
+  // El detalle por remitente se reemplaza por completo: se borra lo anterior y se
+  // inserta lo nuevo, así no hace falta comparar filas una por una.
+  const { error: delErr } = await sb.from("turno_detalle").delete().eq("turno_id", id);
+  if (delErr) throw delErr;
+  if (t.detalle && t.detalle.length) await saveDetalle(id, t.detalle);
+  const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).eq("id", id).single();
+  if (err2) throw err2;
+  return rowToTurno(full);
 }
 async function deleteTurnoDB(id){
   const { error } = await sb.from("turnos").delete().eq("id", id);
@@ -420,15 +433,22 @@ function renderAgenda(){
       <td>${fmtHours(calc.horas)}</td>
       <td>${esc(calc.detalle)}</td>
       <td>${calc.subtotal ? fmtMoney(calc.subtotal) : "—"}</td>
-      <td><button class="btn danger-link" data-del="${t.id}">Eliminar</button></td>
+      <td style="white-space:nowrap;">
+        <button class="btn secondary btn-sm" data-edit="${t.id}">Editar</button>
+        <button class="btn danger-link" data-del="${t.id}">Eliminar</button>
+      </td>
     `;
     tbody.appendChild(tr);
   }
+  tbody.querySelectorAll("[data-edit]").forEach(btn=>{
+    btn.addEventListener("click", ()=> startEditTurno(btn.dataset.edit));
+  });
   tbody.querySelectorAll("[data-del]").forEach(btn=>{
     btn.addEventListener("click", async ()=>{
       try{
         await deleteTurnoDB(btn.dataset.del);
         TURNOS = TURNOS.filter(t=>t.id !== btn.dataset.del);
+        if (editingTurnoId === btn.dataset.del) cancelEditTurno();
         renderAll();
       }catch(e){
         showAlert("Error eliminando el turno: " + e.message, "error");
@@ -618,6 +638,7 @@ function addAgendaFormRow(){
   `;
   row.querySelector(".eps-row-remove").addEventListener("click", ()=> row.remove());
   wrap.appendChild(row);
+  return row;
 }
 function resetAgendaFormRows(){
   document.getElementById("f-agenda-rows").innerHTML = "";
@@ -657,21 +678,75 @@ async function handleAddTurno(){
   if (ent.tipo === "por_hora") nuevo.sede = document.getElementById("f-sede").value.trim();
   if (ent.tipo === "por_agenda") nuevo.detalle = collectAgendaFormRows();
 
-  const check = validarTurno(nuevo);
+  const check = validarTurno(nuevo, editingTurnoId);
   if (!check.ok){
     showAlert(check.motivo, "error");
     return;
   }
 
   try{
-    const saved = await insertTurnoDB(nuevo);
-    TURNOS.push(saved);
-    showAlert(`Turno ${ent.nombre} registrado sin conflictos (${fecha} ${inicio}–${fin}).`, "ok");
-    if (ent.tipo === "por_agenda") resetAgendaFormRows();
+    if (editingTurnoId){
+      const saved = await updateTurnoDB(editingTurnoId, nuevo);
+      const idx = TURNOS.findIndex(t=>t.id === editingTurnoId);
+      if (idx !== -1) TURNOS[idx] = saved;
+      showAlert(`Turno ${ent.nombre} actualizado (${fecha} ${inicio}–${fin}).`, "ok");
+      cancelEditTurno();
+    } else {
+      const saved = await insertTurnoDB(nuevo);
+      TURNOS.push(saved);
+      showAlert(`Turno ${ent.nombre} registrado sin conflictos (${fecha} ${inicio}–${fin}).`, "ok");
+      if (ent.tipo === "por_agenda") resetAgendaFormRows();
+    }
     renderAll();
   }catch(e){
     showAlert("Error guardando el turno: " + e.message, "error");
   }
+}
+
+// Carga un turno ya registrado en el formulario de arriba para editarlo en vez de
+// crear uno nuevo. Útil, por ejemplo, para registrar hoy la disponibilidad de una
+// entidad "por agenda" (fecha/horario) y completar el detalle de pacientes después.
+function startEditTurno(id){
+  const t = TURNOS.find(x=>x.id === id);
+  if (!t) return;
+  const ent = getEntidad(t.entidadId);
+  if (!ent){ showAlert("No se puede editar: la entidad de este turno ya no existe.", "error"); return; }
+  if (!ent.activo){ showAlert(`No se puede editar: la entidad "${ent.nombre}" está desactivada. Actívala primero en «Entidades y tarifas».`, "error"); return; }
+
+  editingTurnoId = id;
+  document.getElementById("f-entidad").value = ent.id;
+  toggleFormFields();
+  document.getElementById("f-fecha").value = t.fecha;
+  document.getElementById("f-inicio").value = t.inicio;
+  document.getElementById("f-fin").value = t.fin;
+  document.getElementById("f-sede").value = t.sede || "";
+
+  if (ent.tipo === "por_agenda"){
+    const wrap = document.getElementById("f-agenda-rows");
+    wrap.innerHTML = "";
+    const detalle = t.detalle && t.detalle.length ? t.detalle : [null];
+    for (const d of detalle){
+      const row = addAgendaFormRow();
+      if (d){
+        row.querySelector(".f-agenda-remitente").value = d.remitenteId;
+        row.querySelector(".f-agenda-cantidad").value = d.cantidad;
+      }
+    }
+  }
+
+  document.getElementById("btn-add-turno").textContent = "Guardar cambios";
+  document.getElementById("btn-cancel-edit").hidden = false;
+  document.getElementById("f-entidad").closest("section").scrollIntoView({behavior:"smooth", block:"start"});
+}
+function cancelEditTurno(){
+  editingTurnoId = null;
+  document.getElementById("btn-add-turno").textContent = "Registrar turno";
+  document.getElementById("btn-cancel-edit").hidden = true;
+  document.getElementById("f-fecha").value = new Date().toISOString().slice(0,10);
+  document.getElementById("f-inicio").value = "";
+  document.getElementById("f-fin").value = "";
+  document.getElementById("f-sede").value = "";
+  resetAgendaFormRows();
 }
 
 // ---------- Maestro: entidades ----------
@@ -1218,6 +1293,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
   document.getElementById("btn-save-remitentes").addEventListener("click", saveRemitentesMaestro);
 
   document.getElementById("btn-add-turno").addEventListener("click", handleAddTurno);
+  document.getElementById("btn-cancel-edit").addEventListener("click", cancelEditTurno);
   document.getElementById("btn-agenda-add").addEventListener("click", addAgendaFormRow);
   document.getElementById("filter-month").addEventListener("change", renderAll);
 
