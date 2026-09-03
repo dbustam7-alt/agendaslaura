@@ -36,17 +36,20 @@ El **tipo no se puede cambiar** una vez creada la entidad (cambiarlo corromperí
 - **Por agenda**: subtotal = suma de (cantidad × tarifa) de cada remitente registrado en el turno.
 - **Por franja horaria**: solo registro de horas dentro del bloque, para control de cumplimiento (no genera facturación).
 
+### Deducciones (trabajador independiente)
+En "⚙️ Entidades y tarifas → Deducciones" se configuran, como % del valor bruto facturado, los descuentos típicos de un independiente en Colombia: **seguridad social** (calculada sobre una base/IBC configurable, por defecto 40% del bruto, con la tasa de salud+pensión también configurable), **vacaciones**, **cesantías** y **retefuente**. Se aplican por turno (solo a entidades "por hora" y "por agenda", que son las que facturan) y se muestran tanto por entidad como en un total del periodo, en el Resumen financiero y en los archivos de cierre de mes (CSV/Excel). Los porcentajes por defecto son un punto de partida — ajústalos según tu régimen real y confírmalos con tu contador.
+
 ### Comportamiento de salida
 Cada vez que se registra un turno o se consulta el balance, la app muestra:
 1. Alerta de solapamiento (si la hubo, antes de rechazar).
-2. Agenda consolidada en tabla cronológica (con filtro por mes).
-3. Resumen financiero detallado por entidad (horas/pacientes, subtotal).
+2. Agenda consolidada en tabla cronológica (con filtro por mes), editable y eliminable turno por turno.
+3. Resumen financiero detallado por entidad (horas/pacientes, bruto, deducciones y neto).
 
 ### Importador masivo
 Desde "📥 Importar masivo" se pega o sube un CSV/Excel por entidad. El formato de columnas se adapta al tipo de la entidad elegida (fecha/horas simples para franja fija y por hora, más sede para por hora; fecha/horas + remitente + cantidad para por agenda, agrupando filas con la misma fecha/hora en un solo turno con varios remitentes).
 
 ### Exportación / cierre de mes
-La sección "Cierre de mes" permite descargar el mes filtrado en la agenda como `.csv` o `.xlsx` (Fecha, Entidad, Sede, Inicio, Fin, Horas, Detalle y Subtotal).
+La sección "Cierre de mes" permite descargar el mes filtrado en la agenda como `.csv` o `.xlsx` (Fecha, Entidad, Sede, Inicio, Fin, Horas, Detalle, Bruto, Seguridad social, Vacaciones, Cesantías, Retefuente y Neto).
 
 ## Estructura de archivos
 - `index.html` — estructura, pantalla de login y formularios.
@@ -59,5 +62,6 @@ Proyecto Supabase dedicado ("Agenda Laura") con estas tablas:
 - `public.remitentes` — remitentes de las entidades "por agenda" (nombre, tarifa, entidad a la que pertenece).
 - `public.turnos` — un registro por turno (entidad, fecha, horas, sede si aplica).
 - `public.turno_detalle` — líneas de remitente/cantidad de los turnos de entidades "por agenda".
+- `public.deducciones` — fila única con los % de seguridad social, vacaciones, cesantías y retefuente del trabajador independiente.
 
 Todas con Row Level Security activo: solo el rol `authenticated` puede leer o escribir. Cargar `index.html` con internet y sesión válida es todo lo que se necesita — no hay servidor propio que desplegar ni mantener.

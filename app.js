@@ -15,6 +15,30 @@ let REMITENTES = [];
 let TURNOS = [];
 let editingTurnoId = null; // id del turno que se está editando en "Registrar turno", o null si es uno nuevo
 
+// ---------- Deducciones (trabajador independiente) ----------
+// Se aplican como % del valor bruto facturado por turno (solo entidades "por hora" y
+// "por agenda" facturan; "por franja horaria" no genera valor sobre el que descontar).
+// Los porcentajes son editables en «Entidades y tarifas» — estos son solo valores
+// iniciales razonables, no una tarifa legal fija: confírmalos con tu contador.
+const DEFAULT_DEDUCCIONES = {
+  segSocialBasePct: 40,   // % del bruto que es la base (IBC) de seguridad social
+  segSocialTasaPct: 28.5, // % (salud + pensión) aplicado sobre esa base
+  vacacionesPct: 4.17,    // % del bruto
+  cesantiasPct: 8.33,     // % del bruto
+  retefuentePct: 11,      // % del bruto
+};
+let DEDUCCIONES = {...DEFAULT_DEDUCCIONES};
+
+function calcDeducciones(subtotal){
+  const baseSegSocial = subtotal * (DEDUCCIONES.segSocialBasePct / 100);
+  const segSocial = baseSegSocial * (DEDUCCIONES.segSocialTasaPct / 100);
+  const vacaciones = subtotal * (DEDUCCIONES.vacacionesPct / 100);
+  const cesantias = subtotal * (DEDUCCIONES.cesantiasPct / 100);
+  const retefuente = subtotal * (DEDUCCIONES.retefuentePct / 100);
+  const total = segSocial + vacaciones + cesantias + retefuente;
+  return { segSocial, vacaciones, cesantias, retefuente, total, neto: subtotal - total };
+}
+
 function esc(s){
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
@@ -36,6 +60,35 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const sb = (window.supabase && window.supabase.createClient)
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
+
+// ---------- Deducciones: persistencia ----------
+function rowToDeducciones(row){
+  return {
+    segSocialBasePct: Number(row.seg_social_base_pct),
+    segSocialTasaPct: Number(row.seg_social_tasa_pct),
+    vacacionesPct: Number(row.vacaciones_pct),
+    cesantiasPct: Number(row.cesantias_pct),
+    retefuentePct: Number(row.retefuente_pct),
+  };
+}
+function deduccionesToRow(d){
+  return {
+    seg_social_base_pct: d.segSocialBasePct,
+    seg_social_tasa_pct: d.segSocialTasaPct,
+    vacaciones_pct: d.vacacionesPct,
+    cesantias_pct: d.cesantiasPct,
+    retefuente_pct: d.retefuentePct,
+  };
+}
+async function fetchDeducciones(){
+  const { data, error } = await sb.from("deducciones").select("*").eq("id", 1).single();
+  if (error){ showAlert("Error cargando deducciones: " + error.message, "error"); return {...DEFAULT_DEDUCCIONES}; }
+  return rowToDeducciones(data);
+}
+async function saveDeduccionesDB(){
+  const { error } = await sb.from("deducciones").update(deduccionesToRow(DEDUCCIONES)).eq("id", 1);
+  if (error) throw error;
+}
 
 // ---------- Entidades ----------
 function rowToEntidad(row){
@@ -187,11 +240,13 @@ async function enterApp(){
   ENTIDADES = await fetchEntidades();
   REMITENTES = await fetchRemitentes();
   TURNOS = await fetchTurnos();
+  DEDUCCIONES = await fetchDeducciones();
 
   renderEntidadesMaestro();
   renderRemitenteEntidadSelector();
   renderEntidadFormOptions();
   renderImportEntidadOptions();
+  loadDeduccionesIntoForm();
 
   document.getElementById("f-fecha").value = new Date().toISOString().slice(0,10);
   document.getElementById("filter-month").value = new Date().toISOString().slice(0,7);
@@ -481,6 +536,18 @@ function renderResumen(){
   const activas = Object.values(acc).sort((x,y)=> x.entidad.orden - y.entidad.orden);
   const total = activas.reduce((s,a)=> s + a.subtotal, 0);
 
+  // Bloque de deducciones (independiente) que se repite en cada entidad que sí factura.
+  function deduccionesRows(subtotal){
+    const ded = calcDeducciones(subtotal);
+    return `
+        <div class="row"><span>Bruto</span><b>${fmtMoney(subtotal)}</b></div>
+        <div class="row"><span>− Seguridad social</span><span>${fmtMoney(ded.segSocial)}</span></div>
+        <div class="row"><span>− Vacaciones</span><span>${fmtMoney(ded.vacaciones)}</span></div>
+        <div class="row"><span>− Cesantías</span><span>${fmtMoney(ded.cesantias)}</span></div>
+        <div class="row"><span>− Retefuente</span><span>${fmtMoney(ded.retefuente)}</span></div>
+        <div class="total">Neto: ${fmtMoney(ded.neto)}</div>`;
+  }
+
   const cards = activas.map(a=>{
     const e = a.entidad;
     let body;
@@ -492,19 +559,29 @@ function renderResumen(){
       body = `
         <div class="row"><span>Horas ordinarias</span><span>${fmtHours(a.ordMin/60)} h</span></div>
         <div class="row"><span>Horas nocturno/fin de semana</span><span>${fmtHours(a.nocMin/60)} h</span></div>
-        <div class="total">${fmtMoney(a.subtotal)}</div>`;
+        ${deduccionesRows(a.subtotal)}`;
     } else {
       const rows = Object.entries(a.porRemitente).sort((x,y)=> y[1].subtotal - x[1].subtotal)
         .map(([nombre,v])=> `<div class="row"><span>${esc(nombre)}</span><b>${v.cantidad} · ${fmtMoney(v.subtotal)}</b></div>`).join("");
-      body = `${rows}<div class="total">${fmtMoney(a.subtotal)}</div>`;
+      body = `${rows}${deduccionesRows(a.subtotal)}`;
     }
     return `<div class="resumen-item"><h3>${TIPO_ICON[e.tipo] || "•"} ${esc(e.nombre)}</h3>${body}</div>`;
   }).join("");
 
+  const dedTotal = calcDeducciones(total);
   document.getElementById("resumen-financiero").innerHTML = cards + `
     <div class="resumen-item">
-      <h3>💵 Total periodo</h3>
+      <h3>💵 Total periodo (bruto)</h3>
       <div class="total">${fmtMoney(total)}</div>
+    </div>
+    <div class="resumen-item">
+      <h3>🧾 Deducciones y neto (periodo)</h3>
+      <div class="row"><span>Seguridad social (${DEDUCCIONES.segSocialTasaPct}% sobre ${DEDUCCIONES.segSocialBasePct}% IBC)</span><span>${fmtMoney(dedTotal.segSocial)}</span></div>
+      <div class="row"><span>Vacaciones (${DEDUCCIONES.vacacionesPct}%)</span><span>${fmtMoney(dedTotal.vacaciones)}</span></div>
+      <div class="row"><span>Cesantías (${DEDUCCIONES.cesantiasPct}%)</span><span>${fmtMoney(dedTotal.cesantias)}</span></div>
+      <div class="row"><span>Retefuente (${DEDUCCIONES.retefuentePct}%)</span><span>${fmtMoney(dedTotal.retefuente)}</span></div>
+      <div class="row"><span><strong>Total deducciones</strong></span><b>${fmtMoney(dedTotal.total)}</b></div>
+      <div class="total">Neto estimado: ${fmtMoney(dedTotal.neto)}</div>
     </div>
   `;
 }
@@ -880,6 +957,34 @@ async function handleDeleteEntidad(id){
   }
 }
 
+// ---------- Maestro: deducciones (trabajador independiente) ----------
+function loadDeduccionesIntoForm(){
+  document.getElementById("ded-seg-base").value = DEDUCCIONES.segSocialBasePct;
+  document.getElementById("ded-seg-tasa").value = DEDUCCIONES.segSocialTasaPct;
+  document.getElementById("ded-vacaciones").value = DEDUCCIONES.vacacionesPct;
+  document.getElementById("ded-cesantias").value = DEDUCCIONES.cesantiasPct;
+  document.getElementById("ded-retefuente").value = DEDUCCIONES.retefuentePct;
+}
+function readDeduccionesFromForm(){
+  DEDUCCIONES = {
+    segSocialBasePct: Number(document.getElementById("ded-seg-base").value || 0),
+    segSocialTasaPct: Number(document.getElementById("ded-seg-tasa").value || 0),
+    vacacionesPct: Number(document.getElementById("ded-vacaciones").value || 0),
+    cesantiasPct: Number(document.getElementById("ded-cesantias").value || 0),
+    retefuentePct: Number(document.getElementById("ded-retefuente").value || 0),
+  };
+}
+async function handleSaveDeducciones(){
+  readDeduccionesFromForm();
+  try{
+    await saveDeduccionesDB();
+    showAlert("Deducciones guardadas.", "ok");
+    renderAll();
+  }catch(e){
+    showAlert("Error guardando deducciones: " + e.message, "error");
+  }
+}
+
 // ---------- Maestro: remitentes por agenda ----------
 function currentRemitenteEntidadId(){
   return document.getElementById("rem-entidad-select").value;
@@ -1202,14 +1307,20 @@ function toCsv(){
   const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
   const list = TURNOS.filter(t => t.fecha.slice(0,7) === month)
     .sort((a,b)=> turnoInterval(a).start - turnoInterval(b).start);
-  const rows = [["Fecha","Entidad","Sede","Inicio","Fin","Horas","Detalle","Subtotal"]];
+  const rows = [["Fecha","Entidad","Sede","Inicio","Fin","Horas","Detalle","Bruto","Seg. Social","Vacaciones","Cesantías","Retefuente","Neto"]];
   for (const t of list){
     const calc = calcularTurno(t);
     const ent = getEntidad(t.entidadId);
+    const ded = calcDeducciones(calc.subtotal);
     rows.push([
       t.fecha, ent ? ent.nombre : "", t.sede||"", t.inicio, t.fin,
       fmtHours(calc.horas), calc.detalle,
-      calc.subtotal ? Math.round(calc.subtotal) : ""
+      calc.subtotal ? Math.round(calc.subtotal) : "",
+      calc.subtotal ? Math.round(ded.segSocial) : "",
+      calc.subtotal ? Math.round(ded.vacaciones) : "",
+      calc.subtotal ? Math.round(ded.cesantias) : "",
+      calc.subtotal ? Math.round(ded.retefuente) : "",
+      calc.subtotal ? Math.round(ded.neto) : "",
     ]);
   }
   return rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
@@ -1226,25 +1337,32 @@ function downloadFile(filename, content, mime){
 
 function downloadExcel(){
   if (typeof XLSX === "undefined"){
-    showAlert("No se pudo cargar la librería de Excel (sin conexión a internet). Usa CSV o Markdown mientras tanto.", "error");
+    showAlert("No se pudo cargar la librería de Excel (sin conexión a internet). Usa CSV mientras tanto.", "error");
     return;
   }
   const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
   const list = TURNOS.filter(t => t.fecha.slice(0,7) === month)
     .sort((a,b)=> turnoInterval(a).start - turnoInterval(b).start);
 
-  const rows = [["Fecha","Entidad","Sede","Inicio","Fin","Horas","Detalle","Subtotal"]];
+  const rows = [["Fecha","Entidad","Sede","Inicio","Fin","Horas","Detalle","Bruto","Seg. Social","Vacaciones","Cesantías","Retefuente","Neto"]];
   for (const t of list){
     const calc = calcularTurno(t);
     const ent = getEntidad(t.entidadId);
-    rows.push([t.fecha, ent ? ent.nombre : "", t.sede||"", t.inicio, t.fin, Number(fmtHours(calc.horas)), calc.detalle, Math.round(calc.subtotal || 0)]);
+    const ded = calcDeducciones(calc.subtotal);
+    rows.push([
+      t.fecha, ent ? ent.nombre : "", t.sede||"", t.inicio, t.fin, Number(fmtHours(calc.horas)), calc.detalle,
+      Math.round(calc.subtotal || 0), Math.round(ded.segSocial), Math.round(ded.vacaciones),
+      Math.round(ded.cesantias), Math.round(ded.retefuente), Math.round(ded.neto),
+    ]);
   }
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws["!cols"] = [{wch:12},{wch:12},{wch:12},{wch:8},{wch:8},{wch:8},{wch:60},{wch:14}];
+  ws["!cols"] = [{wch:12},{wch:12},{wch:12},{wch:8},{wch:8},{wch:8},{wch:60},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];
   for (let r = 1; r < rows.length; r++){
-    const cell = ws[XLSX.utils.encode_cell({r, c:7})];
-    if (cell) cell.z = '"$"#,##0';
+    for (const c of [7,8,9,10,11,12]){
+      const cell = ws[XLSX.utils.encode_cell({r, c})];
+      if (cell) cell.z = '"$"#,##0';
+    }
   }
 
   const wb = XLSX.utils.book_new();
@@ -1291,6 +1409,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
   document.getElementById("rem-entidad-select").addEventListener("change", renderRemitentesMaestro);
   document.getElementById("btn-add-remitente").addEventListener("click", addRemitenteMaestroRow);
   document.getElementById("btn-save-remitentes").addEventListener("click", saveRemitentesMaestro);
+  document.getElementById("btn-save-deducciones").addEventListener("click", handleSaveDeducciones);
 
   document.getElementById("btn-add-turno").addEventListener("click", handleAddTurno);
   document.getElementById("btn-cancel-edit").addEventListener("click", cancelEditTurno);

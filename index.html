@@ -85,6 +85,29 @@
       </div>
     </div>
 
+    <div class="dlg-section">
+      <h3>Deducciones <span class="hint" style="font-weight:400;">(trabajador independiente)</span></h3>
+      <p class="hint">Se descuentan como % del valor <strong>bruto</strong> facturado de cada turno "por hora" o "por agenda" (una entidad "por franja horaria" no genera facturación, así que no aplica). Estos valores son un punto de partida — ajústalos según tu régimen y confírmalos con tu contador.</p>
+      <div class="grid">
+        <label>Base seguridad social
+          <input type="number" id="ded-seg-base" value="40" step="0.1" min="0" max="100">
+        </label>
+        <label>Tasa seg. social sobre esa base (salud+pensión)
+          <input type="number" id="ded-seg-tasa" value="28.5" step="0.1" min="0" max="100">
+        </label>
+        <label>Vacaciones (% del bruto)
+          <input type="number" id="ded-vacaciones" value="4.17" step="0.01" min="0" max="100">
+        </label>
+        <label>Cesantías (% del bruto)
+          <input type="number" id="ded-cesantias" value="8.33" step="0.01" min="0" max="100">
+        </label>
+        <label>Retefuente (% del bruto)
+          <input type="number" id="ded-retefuente" value="11" step="0.1" min="0" max="100">
+        </label>
+      </div>
+      <button type="button" id="btn-save-deducciones" class="btn primary">Guardar deducciones</button>
+    </div>
+
   </div>
 </dialog>
 
@@ -218,7 +241,7 @@
         <button id="btn-export-xlsx" class="btn primary">Descargar Excel (.xlsx)</button>
       </div>
     </div>
-    <p class="hint">CSV y Excel incluyen: Fecha, Entidad, Sede, Inicio, Fin, Horas, Detalle y Subtotal, del mes filtrado en la agenda.</p>
+    <p class="hint">CSV y Excel incluyen, del mes filtrado en la agenda: Fecha, Entidad, Sede, Inicio, Fin, Horas, Detalle, Bruto, Seguridad social, Vacaciones, Cesantías, Retefuente y Neto (según las deducciones configuradas en «Entidades y tarifas»).</p>
   </section>
 
 </main>
