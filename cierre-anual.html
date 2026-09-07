@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📊 Cierre anual</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  /* ---------- gráfico de tendencia mensual ---------- */
+  .viz-root{
+    --chart-surface: var(--card);
+    --ink-primary: var(--ink);
+    --ink-secondary: var(--muted);
+    --ink-muted: #898781;
+    --gridline: var(--line);
+    --status-good: #0ca30c;
+    --status-warning: #fab219;
+  }
+  .chart-legend{ display:flex; gap:18px; margin-bottom:10px; font-size:.8rem; color:var(--ink-secondary); }
+  .chart-legend .key{ display:inline-flex; align-items:center; gap:6px; }
+  .chart-legend .swatch{ width:10px; height:10px; border-radius:2px; display:inline-block; }
+  #ca-chart-container{ overflow-x:auto; }
+  #ca-chart-container svg{ display:block; }
+  .ca-bar-group{ cursor:pointer; }
+  .ca-bar-group rect{ transition:filter .1s; }
+  .ca-bar-group:hover rect, .ca-bar-group:focus rect{ filter:brightness(1.08); }
+  .ca-bar-group:focus{ outline:none; }
+  #ca-tooltip{
+    position:fixed; pointer-events:none; z-index:50; background:var(--ink); color:#fff;
+    padding:8px 10px; border-radius:8px; font-size:.76rem; line-height:1.5; box-shadow:0 4px 14px rgba(0,0,0,.2);
+    opacity:0; transition:opacity .08s; max-width:220px;
+  }
+  #ca-tooltip.visible{ opacity:1; }
+  #ca-tooltip .tt-title{ font-weight:700; margin-bottom:2px; }
+  #ca-tooltip .tt-row{ display:flex; justify-content:space-between; gap:10px; }
+  #ca-tooltip .tt-key{ display:inline-flex; align-items:center; gap:5px; opacity:.85; }
+  #ca-tooltip .tt-key .stroke{ width:10px; height:2px; display:inline-block; }
+</style>
+</head>
+<body>
+
+<div id="needs-login" class="card">
+  <h1>📊 Cierre anual</h1>
+  <p class="hint" id="needs-login-text">Necesitas iniciar sesión primero en la app principal.</p>
+  <p><a href="index.html" class="btn primary">Ir al inicio</a></p>
+</div>
+
+<div id="ca-root" hidden>
+
+<header>
+  <div class="header-row">
+    <div>
+      <h1>📊 Cierre anual</h1>
+      <p class="subtitle"><span id="ca-proyecto-nombre"></span> — total facturado, deducciones y neto del año, para la declaración de renta</p>
+    </div>
+    <div class="header-actions">
+      <a href="cuenta-cobro.html" class="btn secondary">🧾 Cuentas de cobro</a>
+      <a href="index.html" class="btn secondary">← Volver a la agenda</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div id="alert-box" class="alert" hidden></div>
+
+  <section class="card">
+    <h2>Selecciona el año</h2>
+    <p class="hint">Se calcula sobre las cuentas de cobro ya generadas (fecha de emisión), no sobre los turnos agendados — es lo que realmente se facturó y quedó documentado.</p>
+    <div class="cc-grid" style="display:flex; align-items:flex-end; gap:12px;">
+      <label>Año
+        <input type="number" id="ca-anio" step="1" style="width:120px;">
+      </label>
+      <button type="button" id="btn-calcular" class="btn primary">Calcular cierre</button>
+    </div>
+  </section>
+
+  <section class="card" id="ca-results" hidden>
+    <h2 id="ca-titulo"></h2>
+    <div class="resumen-grid" id="ca-resumen"></div>
+  </section>
+
+  <section class="card viz-root" id="ca-chart-wrap" hidden>
+    <h2>Tendencia mensual</h2>
+    <p class="hint">Bruto facturado por mes, según cuándo se pagó cada cuenta de cobro.</p>
+    <div class="chart-legend">
+      <span class="key"><span class="swatch" style="background:var(--status-good);"></span> Cobrado</span>
+      <span class="key"><span class="swatch" style="background:var(--status-warning);"></span> Pendiente</span>
+    </div>
+    <div id="ca-chart-container"></div>
+  </section>
+
+  <section class="card" id="ca-export-wrap" hidden>
+    <h2>📤 Exportar para el contador</h2>
+    <p class="hint">Incluye resumen del año, facturado por entidad y el detalle de cada cuenta de cobro (bruto, cada deducción, neto y estado de pago).</p>
+    <div style="display:flex; gap:8px;">
+      <button type="button" id="btn-export-xlsx" class="btn primary">Descargar Excel (.xlsx)</button>
+      <button type="button" id="btn-export-csv" class="btn secondary">Descargar CSV (detalle)</button>
+    </div>
+  </section>
+
+  <section class="card" id="ca-entidades-wrap" hidden>
+    <h2>Facturado por entidad</h2>
+    <div class="table-wrap">
+      <table class="table-num" id="tbl-ca-entidades">
+        <thead><tr><th style="text-align:left;">Entidad</th><th>Bruto</th><th>% del total</th></tr></thead>
+        <tbody id="ca-entidades-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" id="ca-detalle-wrap" hidden>
+    <h2>Cuentas de cobro del año (detalle)</h2>
+    <div class="table-wrap">
+      <table id="tbl-ca-detalle">
+        <thead><tr><th>N°</th><th>Fecha</th><th>Entidad</th><th>Bruto</th><th>Neto</th><th>Estado</th><th>Fecha pago</th></tr></thead>
+        <tbody id="ca-detalle-rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div id="ca-tooltip"></div>
+
+</div>
+
+<script src="shared.js"></script>
+<script src="cierre-anual.js"></script>
+</body>
+</html>

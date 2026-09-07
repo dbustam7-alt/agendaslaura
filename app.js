@@ -1,222 +1,10 @@
-/* Agenda Laura — login, persistencia en Supabase, validación, facturación y export.
-   Sistema unificado: toda entidad (CES/AUNA/NOEL y cualquiera que se agregue) es una
-   fila de la tabla `entidades` con un `tipo` que define cómo se valida y se factura:
-     - franja_fija: bloque semanal fijo de horas (ej. CES). No factura, solo controla choques.
-     - por_hora:    tarifa por hora, ordinaria vs. nocturna/fin de semana (ej. AUNA).
-     - por_agenda:  turnos variables facturados por remitente/paciente (ej. NOEL). */
+/* Agenda Laura — pantalla principal (index.html): login, UI del formulario de
+   turnos, calendario, resumen financiero, maestros (entidades/remitentes/
+   deducciones), importador masivo y exportación. La conexión a Supabase, el
+   modelo de datos y el cálculo de facturación/validación viven en shared.js
+   (compartido también por cuenta-cobro.js) — este archivo se carga después. */
 
-const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
-const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-const TIPO_LABEL = { franja_fija:"Por franja horaria", por_hora:"Por hora", por_agenda:"Por agenda" };
-const TIPO_ICON = { franja_fija:"🟣", por_hora:"🔵", por_agenda:"🟠" };
-
-let ENTIDADES = [];
-let REMITENTES = [];
-let TURNOS = [];
 let editingTurnoId = null; // id del turno que se está editando en "Registrar turno", o null si es uno nuevo
-
-// ---------- Deducciones (trabajador independiente) ----------
-// Se aplican como % del valor bruto facturado por turno (solo entidades "por hora" y
-// "por agenda" facturan; "por franja horaria" no genera valor sobre el que descontar).
-// Los porcentajes son editables en «Entidades y tarifas» — estos son solo valores
-// iniciales razonables, no una tarifa legal fija: confírmalos con tu contador.
-const DEFAULT_DEDUCCIONES = {
-  segSocialBasePct: 40,   // % del bruto que es la base (IBC) de seguridad social
-  segSocialTasaPct: 28.5, // % (salud + pensión) aplicado sobre esa base
-  vacacionesPct: 4.17,    // % del bruto
-  cesantiasPct: 8.33,     // % del bruto
-  retefuentePct: 11,      // % del bruto
-};
-let DEDUCCIONES = {...DEFAULT_DEDUCCIONES};
-
-function calcDeducciones(subtotal){
-  const baseSegSocial = subtotal * (DEDUCCIONES.segSocialBasePct / 100);
-  const segSocial = baseSegSocial * (DEDUCCIONES.segSocialTasaPct / 100);
-  const vacaciones = subtotal * (DEDUCCIONES.vacacionesPct / 100);
-  const cesantias = subtotal * (DEDUCCIONES.cesantiasPct / 100);
-  const retefuente = subtotal * (DEDUCCIONES.retefuentePct / 100);
-  const total = segSocial + vacaciones + cesantias + retefuente;
-  return { segSocial, vacaciones, cesantias, retefuente, total, neto: subtotal - total };
-}
-
-function esc(s){
-  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-}
-function getEntidad(id){ return ENTIDADES.find(e => e.id === id); }
-function remitentesDeEntidad(entidadId){
-  return REMITENTES.filter(r => r.entidadId === entidadId).sort((a,b)=> a.orden - b.orden);
-}
-
-// ---------- Conexión Supabase ----------
-// La URL y la "anon key" son públicas por diseño (Supabase las espera en el
-// cliente): por sí solas NO dan acceso a los datos. Row Level Security en el
-// proyecto exige una sesión autenticada (haber iniciado sesión) para poder
-// leer o escribir en las tablas. La "service role key" (que sí se salta esa
-// protección) nunca debe ir aquí ni a ningún código de cliente.
-const SUPABASE_URL = "https://gdntsqutspcxsaqecqgp.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdkbnRzcXV0c3BjeHNhcWVjcWdwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzNjEwNDgsImV4cCI6MjEwMzkzNzA0OH0.4m1QnFch6zJgKqLHdfDxW4kt9C65anNCEG3z5spJ6pM";
-// Si la librería de Supabase no cargó (ej. sin conexión), `sb` queda en null
-// y el arranque muestra un aviso en vez de romper toda la página en silencio.
-const sb = (window.supabase && window.supabase.createClient)
-  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-  : null;
-
-// ---------- Deducciones: persistencia ----------
-function rowToDeducciones(row){
-  return {
-    segSocialBasePct: Number(row.seg_social_base_pct),
-    segSocialTasaPct: Number(row.seg_social_tasa_pct),
-    vacacionesPct: Number(row.vacaciones_pct),
-    cesantiasPct: Number(row.cesantias_pct),
-    retefuentePct: Number(row.retefuente_pct),
-  };
-}
-function deduccionesToRow(d){
-  return {
-    seg_social_base_pct: d.segSocialBasePct,
-    seg_social_tasa_pct: d.segSocialTasaPct,
-    vacaciones_pct: d.vacacionesPct,
-    cesantias_pct: d.cesantiasPct,
-    retefuente_pct: d.retefuentePct,
-  };
-}
-async function fetchDeducciones(){
-  const { data, error } = await sb.from("deducciones").select("*").eq("id", 1).single();
-  if (error){ showAlert("Error cargando deducciones: " + error.message, "error"); return {...DEFAULT_DEDUCCIONES}; }
-  return rowToDeducciones(data);
-}
-async function saveDeduccionesDB(){
-  const { error } = await sb.from("deducciones").update(deduccionesToRow(DEDUCCIONES)).eq("id", 1);
-  if (error) throw error;
-}
-
-// ---------- Entidades ----------
-function rowToEntidad(row){
-  return { id: row.id, nombre: row.nombre, tipo: row.tipo, color: row.color, config: row.config || {}, orden: row.orden, activo: row.activo };
-}
-async function fetchEntidades(){
-  const { data, error } = await sb.from("entidades").select("*").order("orden");
-  if (error){ showAlert("Error cargando entidades: " + error.message, "error"); return []; }
-  return data.map(rowToEntidad);
-}
-async function insertEntidadDB(e){
-  const { error } = await sb.from("entidades").insert({ nombre:e.nombre, tipo:e.tipo, color:e.color, config:e.config, orden:e.orden, activo:e.activo });
-  if (error) throw error;
-}
-async function updateEntidadDB(id, e){
-  // El tipo no se puede cambiar una vez creada la entidad: cambiarlo corrompería
-  // la validación y facturación de los turnos ya registrados con ese tipo.
-  const { error } = await sb.from("entidades").update({ nombre:e.nombre, color:e.color, config:e.config, activo:e.activo }).eq("id", id);
-  if (error) throw error;
-}
-async function deleteEntidadDB(id){
-  // La base de datos rechaza el borrado (llave foránea) si la entidad todavía
-  // tiene turnos o remitentes asociados — eso es intencional, ver isForeignKeyError().
-  const { error } = await sb.from("entidades").delete().eq("id", id);
-  if (error) throw error;
-}
-function isForeignKeyError(e){
-  return !!e && (e.code === "23503" || /foreign key|violates.*constraint/i.test(e.message || ""));
-}
-
-// ---------- Remitentes (entidades tipo "por_agenda": EPS, aseguradoras, Particular, Póliza...) ----------
-async function fetchRemitentes(){
-  const { data, error } = await sb.from("remitentes").select("*").eq("activo", true).order("orden");
-  if (error){ showAlert("Error cargando remitentes: " + error.message, "error"); return []; }
-  return data.map(r => ({ id: r.id, nombre: r.nombre, tarifa: Number(r.tarifa), orden: r.orden, entidadId: r.entidad_id }));
-}
-async function insertRemitenteDB(entidadId, nombre, tarifa){
-  const orden = remitentesDeEntidad(entidadId).length;
-  const { error } = await sb.from("remitentes").insert({ nombre, tarifa, orden, activo:true, entidad_id: entidadId });
-  if (error) throw error;
-}
-async function updateRemitenteDB(id, nombre, tarifa){
-  const { error } = await sb.from("remitentes").update({ nombre, tarifa }).eq("id", id);
-  if (error) throw error;
-}
-
-// ---------- Turnos ----------
-const TURNO_SELECT = "*, turno_detalle(cantidad, remitente_id, remitentes(nombre, tarifa))";
-
-function rowToTurno(row){
-  const detalle = (row.turno_detalle || [])
-    .filter(d => d.cantidad > 0)
-    .map(d => ({
-      remitenteId: d.remitente_id,
-      nombre: d.remitentes ? d.remitentes.nombre : "(remitente eliminado)",
-      tarifa: d.remitentes ? Number(d.remitentes.tarifa) : 0,
-      cantidad: d.cantidad,
-    }));
-  return {
-    id: row.id,
-    entidadId: row.entidad_id,
-    fecha: row.fecha,
-    inicio: row.inicio.slice(0,5),
-    fin: row.fin.slice(0,5),
-    sede: row.sede || undefined,
-    detalle,
-  };
-}
-function turnoToRow(t){
-  return {
-    entidad_id: t.entidadId,
-    fecha: t.fecha,
-    inicio: t.inicio,
-    fin: t.fin,
-    sede: t.sede || null,
-  };
-}
-async function saveDetalle(turnoId, detalle){
-  const rows = (detalle || []).filter(d => d.cantidad > 0 && d.remitenteId).map(d => ({
-    turno_id: turnoId, remitente_id: d.remitenteId, cantidad: d.cantidad,
-  }));
-  if (rows.length === 0) return;
-  const { error } = await sb.from("turno_detalle").insert(rows);
-  if (error) throw error;
-}
-async function fetchTurnos(){
-  const { data, error } = await sb.from("turnos").select(TURNO_SELECT).order("fecha").order("inicio");
-  if (error){ showAlert("Error cargando turnos: " + error.message, "error"); return []; }
-  return data.map(rowToTurno);
-}
-async function insertTurnoDB(t){
-  const { data, error } = await sb.from("turnos").insert(turnoToRow(t)).select().single();
-  if (error) throw error;
-  if (t.detalle && t.detalle.length) await saveDetalle(data.id, t.detalle);
-  const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).eq("id", data.id).single();
-  if (err2) throw err2;
-  return rowToTurno(full);
-}
-async function insertTurnosBulkDB(list){
-  const { data, error } = await sb.from("turnos").insert(list.map(turnoToRow)).select();
-  if (error) throw error;
-  // Supabase devuelve las filas insertadas en el mismo orden que se enviaron.
-  for (let i = 0; i < data.length; i++){
-    if (list[i].detalle && list[i].detalle.length){
-      await saveDetalle(data[i].id, list[i].detalle);
-    }
-  }
-  const ids = data.map(r => r.id);
-  const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).in("id", ids);
-  if (err2) throw err2;
-  return full.map(rowToTurno);
-}
-async function updateTurnoDB(id, t){
-  const { error } = await sb.from("turnos").update(turnoToRow(t)).eq("id", id);
-  if (error) throw error;
-  // El detalle por remitente se reemplaza por completo: se borra lo anterior y se
-  // inserta lo nuevo, así no hace falta comparar filas una por una.
-  const { error: delErr } = await sb.from("turno_detalle").delete().eq("turno_id", id);
-  if (delErr) throw delErr;
-  if (t.detalle && t.detalle.length) await saveDetalle(id, t.detalle);
-  const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).eq("id", id).single();
-  if (err2) throw err2;
-  return rowToTurno(full);
-}
-async function deleteTurnoDB(id){
-  const { error } = await sb.from("turnos").delete().eq("id", id);
-  if (error) throw error;
-}
 
 // ---------- Autenticación ----------
 function showLoginAlert(msg, type){
@@ -227,12 +15,151 @@ function showLoginAlert(msg, type){
 }
 function showLoginScreen(){
   document.getElementById("app-root").hidden = true;
+  document.getElementById("proyecto-screen").hidden = true;
   document.getElementById("login-screen").hidden = false;
   document.getElementById("login-password").value = "";
+  showLoginForm(); // al volver a la pantalla de acceso (ej. tras salir), siempre arranca en login, no en registro
 }
+function showLoginForm(){
+  document.getElementById("signup-form").hidden = true;
+  document.getElementById("login-form").hidden = false;
+}
+function showSignupForm(){
+  document.getElementById("login-form").hidden = true;
+  document.getElementById("signup-form").hidden = false;
+}
+function showSignupAlert(msg, type){
+  const box = document.getElementById("signup-alert");
+  box.hidden = false;
+  box.className = "alert " + type;
+  box.textContent = (type === "error" ? "⚠️ " : "✅ ") + msg;
+}
+// ---------- Proyecto (consultorio): elegir, crear, vincularse ----------
+function showProyectoScreen(){
+  document.getElementById("login-screen").hidden = true;
+  document.getElementById("app-root").hidden = true;
+  document.getElementById("proyecto-screen").hidden = false;
+  mostrarOpcionesProyecto();
+}
+function showProyectoAlert(msg, type){
+  const box = document.getElementById("proyecto-alert");
+  box.hidden = false;
+  box.className = "alert " + type;
+  box.textContent = (type === "error" ? "⚠️ " : "✅ ") + msg;
+}
+function mostrarOpcionesProyecto(){
+  document.getElementById("proyecto-opciones").hidden = false;
+  document.getElementById("form-crear-proyecto").hidden = true;
+  document.getElementById("form-vincular-proyecto").hidden = true;
+}
+function mostrarFormCrearProyecto(){
+  document.getElementById("proyecto-opciones").hidden = true;
+  document.getElementById("form-crear-proyecto").hidden = false;
+  document.getElementById("form-vincular-proyecto").hidden = true;
+}
+function mostrarFormVincularProyecto(){
+  document.getElementById("proyecto-opciones").hidden = true;
+  document.getElementById("form-crear-proyecto").hidden = true;
+  document.getElementById("form-vincular-proyecto").hidden = false;
+}
+function renderProyectoLista(lista){
+  const wrap = document.getElementById("proyecto-lista-wrap");
+  const cont = document.getElementById("proyecto-lista");
+  if (!lista.length){ wrap.hidden = true; cont.innerHTML = ""; return; }
+  wrap.hidden = false;
+  cont.innerHTML = lista.map(p => `
+    <button type="button" class="proyecto-item" data-proyecto="${p.id}">
+      <span>${esc(p.nombre)}</span>
+      <span class="proyecto-rol">${esc(p.rol)}</span>
+    </button>
+  `).join("");
+  cont.querySelectorAll("[data-proyecto]").forEach(btn=>{
+    btn.addEventListener("click", ()=> entrarAProyecto(lista.find(p=>p.id===btn.dataset.proyecto)));
+  });
+}
+async function entrarAProyecto(proyecto){
+  PROYECTO_ACTUAL = proyecto;
+  setProyectoGuardado(proyecto.id);
+  document.getElementById("proyecto-screen").hidden = true;
+  await enterApp();
+}
+// Punto de entrada tras confirmar sesión: resuelve el proyecto activo solo (si ya
+// tiene uno guardado o pertenece a exactamente uno) o pide elegir/crear/vincularse.
+async function handleAuthenticated(){
+  document.getElementById("login-screen").hidden = true;
+  const { activo, lista } = await resolverProyectoActivo();
+  if (activo){
+    document.getElementById("proyecto-screen").hidden = true;
+    await enterApp();
+    return;
+  }
+  showProyectoScreen();
+  renderProyectoLista(lista);
+}
+async function handleCrearProyecto(e){
+  e.preventDefault();
+  const nombre = document.getElementById("nuevo-proyecto-nombre").value.trim();
+  if (!nombre) return;
+  const btn = e.target.querySelector("button[type=submit]");
+  btn.disabled = true;
+  try{
+    const id = await crearProyecto(nombre);
+    await entrarAProyecto({ id, nombre, rol: "dueño" });
+  }catch(err){
+    showProyectoAlert("Error creando el proyecto: " + err.message, "error");
+  }finally{
+    btn.disabled = false;
+  }
+}
+async function handleVincularProyecto(e){
+  e.preventDefault();
+  const codigo = document.getElementById("codigo-invitacion").value.trim();
+  if (!codigo) return;
+  const btn = e.target.querySelector("button[type=submit]");
+  btn.disabled = true;
+  try{
+    const proyectoId = await redimirInvitacion(codigo);
+    const lista = await fetchMisProyectos();
+    const proyecto = lista.find(p=>p.id===proyectoId) || { id: proyectoId, nombre: "Proyecto vinculado", rol: "miembro" };
+    await entrarAProyecto(proyecto);
+  }catch(err){
+    showProyectoAlert("No se pudo vincular: " + err.message, "error");
+  }finally{
+    btn.disabled = false;
+  }
+}
+function handleCambiarProyecto(){
+  document.getElementById("app-root").hidden = true;
+  showProyectoScreen();
+  fetchMisProyectos().then(renderProyectoLista);
+}
+
+// ---------- Personas con acceso al proyecto ----------
+async function renderMiembros(){
+  const miembros = await fetchMiembrosProyecto(PROYECTO_ACTUAL.id);
+  document.getElementById("miembros-rows").innerHTML = miembros.map(m=>`
+    <tr><td>${esc(m.email)}</td><td style="text-transform:capitalize;">${esc(m.rol)}</td></tr>
+  `).join("");
+  document.getElementById("invitacion-wrap").hidden = false;
+  document.getElementById("invitacion-codigo").hidden = true;
+  document.getElementById("invitacion-hint").textContent = "";
+}
+async function handleGenerarInvitacion(){
+  try{
+    const codigo = await generarInvitacion(PROYECTO_ACTUAL.id);
+    const span = document.getElementById("invitacion-codigo");
+    span.hidden = false;
+    span.textContent = codigo;
+    document.getElementById("invitacion-hint").textContent = "Comparte este código con quien quieras invitar — lo ingresa en «Vincularme con un código» al crear su cuenta. Se puede usar una sola vez.";
+  }catch(err){
+    showAlert("Error generando la invitación: " + err.message, "error");
+  }
+}
+
 async function enterApp(){
   document.getElementById("login-screen").hidden = true;
   document.getElementById("app-root").hidden = false;
+  document.getElementById("app-title").textContent = PROYECTO_ACTUAL.nombre;
 
   const { data: { user } } = await sb.auth.getUser();
   document.getElementById("user-email-label").textContent = user ? user.email : "";
@@ -267,185 +194,42 @@ async function handleLogin(e){
 }
 async function handleLogout(){
   await sb.auth.signOut();
+  PROYECTO_ACTUAL = null;
+  limpiarProyectoGuardado(); // así la próxima persona que use este navegador no hereda el proyecto de la anterior
 }
-
-// ---------- Helpers de fecha/hora ----------
-function parseTimeParts(hhmm){
-  const [h,m] = hhmm.split(":").map(Number);
-  return [h,m,0,0];
-}
-function toDateTime(fechaISO, horaHHMM){
-  const d = new Date(fechaISO + "T00:00:00");
-  const [h,m] = parseTimeParts(horaHHMM);
-  d.setHours(h,m,0,0);
-  return d;
-}
-function turnoInterval(t){
-  const start = toDateTime(t.fecha, t.inicio);
-  let end = toDateTime(t.fecha, t.fin);
-  if (end.getTime() <= start.getTime()) end.setDate(end.getDate()+1); // cruza medianoche
-  return {start, end};
-}
-function overlaps(aStart, aEnd, bStart, bEnd){
-  return aStart.getTime() < bEnd.getTime() && bStart.getTime() < aEnd.getTime();
-}
-function isWeekendDate(d){
-  const day = d.getDay(); // 0=Dom, 6=Sáb
-  return day === 0 || day === 6;
-}
-function minutesOfDay(d){ return d.getHours()*60 + d.getMinutes(); }
-function fmtMoney(n){
-  return "$" + Math.round(n).toLocaleString("es-CO");
-}
-function fmtHours(h){
-  return (Math.round(h*100)/100).toString();
-}
-
-// ---------- Bloques de franja fija (generaliza el antiguo bloqueo CES) ----------
-function franjaBlockForDate(entidad, fechaISO){
-  const cfg = entidad.config || {};
-  const dias = cfg.dias || [];
-  const d = new Date(fechaISO + "T00:00:00");
-  if (cfg.vigenciaDesde && d < new Date(cfg.vigenciaDesde + "T00:00:00")) return null;
-  if (!dias.includes(d.getDay())) return null;
-  const exactStart = toDateTime(fechaISO, cfg.horaInicio || "00:00");
-  const exactEnd = toDateTime(fechaISO, cfg.horaFin || "00:00");
-  const start = new Date(exactStart); start.setMinutes(start.getMinutes() - Number(cfg.bufferMin || 0));
-  const end = new Date(exactEnd); end.setMinutes(end.getMinutes() + Number(cfg.bufferMin || 0));
-  return { start, end, exactStart, exactEnd, entidad };
-}
-function franjaBlocksInRange(start, end){
-  const franjaEntidades = ENTIDADES.filter(e => e.tipo === "franja_fija" && e.activo);
-  const blocks = [];
-  let d = new Date(start); d.setHours(0,0,0,0);
-  const last = new Date(end);
-  while (d.getTime() <= last.getTime()){
-    const iso = d.toISOString().slice(0,10);
-    for (const ent of franjaEntidades){
-      const b = franjaBlockForDate(ent, iso);
-      if (b) blocks.push(b);
-    }
-    d.setDate(d.getDate()+1);
+// El registro crea una cuenta de Supabase Auth nueva; el aislamiento de datos por
+// dueño (RLS + user_id) ya está en la base — con solo iniciar sesión, esa persona
+// arranca con su propia agenda vacía (shared.js/cuenta-cobro.js crean su fila de
+// `prestador`/`deducciones` solas la primera vez que las necesitan).
+async function handleSignup(e){
+  e.preventDefault();
+  const email = document.getElementById("signup-email").value.trim();
+  const password = document.getElementById("signup-password").value;
+  const passwordConfirm = document.getElementById("signup-password-confirm").value;
+  if (password !== passwordConfirm){
+    showSignupAlert("Las contraseñas no coinciden.", "error");
+    return;
   }
-  return blocks;
-}
-function franjaEntidadesForDate(iso){
-  return ENTIDADES.filter(e => e.tipo === "franja_fija" && e.activo && franjaBlockForDate(e, iso));
-}
-function franjaEntidadForDate(iso){
-  return franjaEntidadesForDate(iso)[0] || null;
-}
-
-// ---------- Validación de choques ----------
-function validarTurno(nuevo, excludeId, extra){
-  const {start, end} = turnoInterval(nuevo);
-  const candidatos = extra && extra.length ? TURNOS.concat(extra) : TURNOS;
-
-  // 1. Choque contra otros turnos ya registrados (incluyendo un lote de importación en curso)
-  for (const t of candidatos){
-    if (excludeId && t.id === excludeId) continue;
-    const iv = turnoInterval(t);
-    if (overlaps(start, end, iv.start, iv.end)){
-      const otra = getEntidad(t.entidadId);
-      return {
-        ok:false,
-        motivo:`Choque con turno existente: ${otra ? otra.nombre : "?"} el ${t.fecha} (${t.inicio}–${t.fin}).`
-      };
-    }
+  if (password.length < 6){
+    showSignupAlert("La contraseña debe tener al menos 6 caracteres.", "error");
+    return;
   }
-
-  // 2. Choque contra bloques fijos de cualquier entidad "por franja horaria" (incluye buffer de traslado)
-  const blocks = franjaBlocksInRange(start, end);
-  for (const b of blocks){
-    if (overlaps(start, end, b.start, b.end)){
-      if (nuevo.entidadId === b.entidad.id){
-        // El propio turno de esa entidad debe caber dentro del bloque exacto (sin contar el buffer)
-        if (start.getTime() < b.exactStart.getTime() || end.getTime() > b.exactEnd.getTime()){
-          const cfg = b.entidad.config;
-          return {
-            ok:false,
-            motivo:`El turno ${b.entidad.nombre} debe estar contenido en su bloque fijo ${cfg.horaInicio}–${cfg.horaFin}.`
-          };
-        }
-        continue; // es el propio bloque, válido
-      }
-      const cfg = b.entidad.config;
-      return {
-        ok:false,
-        motivo:`Choque con el BLOQUE FIJO de ${b.entidad.nombre} (${cfg.horaInicio}–${cfg.horaFin} ± ${cfg.bufferMin} min de traslado) el ${nuevo.fecha}.`
-      };
-    }
+  const btn = document.getElementById("btn-signup");
+  btn.disabled = true;
+  const { data, error } = await sb.auth.signUp({ email, password });
+  btn.disabled = false;
+  if (error){
+    showSignupAlert("No se pudo crear la cuenta: " + error.message, "error");
+    return;
   }
-
-  return {ok:true};
-}
-
-// ---------- Facturación por hora (generaliza el antiguo cálculo de AUNA) ----------
-function computeHourlyBilling(start, end, cfg){
-  const noctInicio = (cfg.noctInicio || "19:00").slice(0,5);
-  const noctFin = (cfg.noctFin || "07:00").slice(0,5);
-  const tarifaOrd = Number(cfg.tarifaOrd || 0), tarifaNoc = Number(cfg.tarifaNoc || 0);
-
-  function isInNocturno(d){
-    const [sh,sm] = noctInicio.split(":").map(Number);
-    const [eh,em] = noctFin.split(":").map(Number);
-    const startMin = sh*60+sm, endMin = eh*60+em;
-    const cur = minutesOfDay(d);
-    if (startMin > endMin) return cur >= startMin || cur < endMin; // cruza medianoche
-    return cur >= startMin && cur < endMin;
+  if (data.session){
+    // Confirmación de correo desactivada en este proyecto: ya queda con sesión
+    // iniciada — onAuthStateChange se encarga de entrar a la app.
+    return;
   }
-  function tarifaEnInstante(d){
-    if (isWeekendDate(d)) return tarifaNoc;   // fin de semana completo
-    if (isInNocturno(d)) return tarifaNoc;    // nocturno entre semana
-    return tarifaOrd;                          // ordinario diurno
-  }
-
-  const pts = new Set([start.getTime(), end.getTime()]);
-  let d = new Date(start); d.setHours(0,0,0,0);
-  while (d.getTime() <= end.getTime()){
-    pts.add(d.getTime()); // medianoche
-    const [sh,sm] = noctInicio.split(":").map(Number);
-    const [eh,em] = noctFin.split(":").map(Number);
-    const ns = new Date(d); ns.setHours(sh,sm,0,0);
-    const ne = new Date(d); ne.setHours(eh,em,0,0);
-    pts.add(ns.getTime()); pts.add(ne.getTime());
-    d.setDate(d.getDate()+1);
-  }
-  const sorted = [...pts].filter(t=>t>=start.getTime() && t<=end.getTime()).sort((a,b)=>a-b);
-  let ordMin=0, nocMin=0, subtotal=0;
-  for (let i=0;i<sorted.length-1;i++){
-    const a=sorted[i], b=sorted[i+1];
-    if (b<=a) continue;
-    const mid = new Date((a+b)/2);
-    const rate = tarifaEnInstante(mid);
-    const minutes = (b-a)/60000;
-    if (rate === tarifaNoc) nocMin += minutes; else ordMin += minutes;
-    subtotal += (minutes/60) * rate;
-  }
-  return { ordMin, nocMin, subtotal };
-}
-
-// ---------- Cálculo genérico por turno, según el tipo de su entidad ----------
-function calcularTurno(t){
-  const {start, end} = turnoInterval(t);
-  const horas = (end - start) / 3600000;
-  const ent = getEntidad(t.entidadId);
-  if (!ent) return { horas, subtotal:0, detalle:"(entidad eliminada)" };
-
-  if (ent.tipo === "por_hora"){
-    const b = computeHourlyBilling(start, end, ent.config);
-    const detalle = `${t.sede || ""} · ord ${fmtHours(b.ordMin/60)}h / noc-finde ${fmtHours(b.nocMin/60)}h`;
-    return { horas, subtotal: b.subtotal, detalle, ordMin: b.ordMin, nocMin: b.nocMin };
-  }
-  if (ent.tipo === "por_agenda"){
-    const detalleLista = t.detalle || [];
-    const total = detalleLista.reduce((s,d)=> s + d.cantidad, 0);
-    const subtotal = detalleLista.reduce((s,d)=> s + d.cantidad*d.tarifa, 0);
-    const resumen = detalleLista.length ? detalleLista.map(d => `${d.nombre} (${d.cantidad})`).join(", ") : "—";
-    return { horas, subtotal, detalle: `${total} pac./visitas: ${resumen}`, detalleLista, total };
-  }
-  // franja_fija
-  return { horas, subtotal: 0, detalle: "Registro horas contrato" };
+  // Confirmación de correo activada: todavía no hay sesión hasta que confirme.
+  document.getElementById("signup-form").reset();
+  showSignupAlert("Cuenta creada. Revisa tu correo y confirma tu cuenta para poder iniciar sesión.", "ok");
 }
 
 // ---------- Render: alerta ----------
@@ -480,18 +264,18 @@ function renderAgenda(){
     const color = ent ? ent.color : "#94a3b8";
     const tr = document.createElement("tr");
     tr.innerHTML = `
+      <td style="white-space:nowrap;">
+        <button class="btn secondary btn-sm" data-edit="${t.id}">Editar</button>
+        <button class="btn danger-link" data-del="${t.id}">Eliminar</button>
+      </td>
       <td>${t.fecha}</td>
       <td>${DIAS[d.getDay()]}</td>
       <td><span class="badge" style="--badge-color:${color}">${esc(nombre)}</span></td>
       <td>${t.inicio}</td>
       <td>${t.fin}</td>
       <td>${fmtHours(calc.horas)}</td>
-      <td>${esc(calc.detalle)}</td>
       <td>${calc.subtotal ? fmtMoney(calc.subtotal) : "—"}</td>
-      <td style="white-space:nowrap;">
-        <button class="btn secondary btn-sm" data-edit="${t.id}">Editar</button>
-        <button class="btn danger-link" data-del="${t.id}">Eliminar</button>
-      </td>
+      <td>${esc(calc.detalle)}</td>
     `;
     tbody.appendChild(tr);
   }
@@ -701,7 +485,10 @@ function renderEntidadFormOptions(){
   if (ent && ent.tipo === "por_agenda") resetAgendaFormRows();
 }
 
-// ---------- Filas dinámicas de remitentes (entidades "por agenda") ----------
+// ---------- Filas dinámicas de pacientes (entidades "por agenda") ----------
+// Cada fila es un paciente: remitente (EPS/aseguradora/etc.), su nombre, y un valor
+// que se precarga con la tarifa del remitente pero se puede editar — el precio real
+// puede variar de un paciente a otro aunque compartan remitente.
 function addAgendaFormRow(){
   const ent = currentFormEntidad();
   const opciones = ent ? remitentesDeEntidad(ent.id) : [];
@@ -709,10 +496,19 @@ function addAgendaFormRow(){
   const row = document.createElement("div");
   row.className = "eps-row";
   row.innerHTML = `
-    <select class="f-agenda-remitente">${opciones.map(r=>`<option value="${r.id}">${esc(r.nombre)}</option>`).join("")}</select>
-    <input type="number" class="f-agenda-cantidad" min="0" value="0" placeholder="Cant.">
-    <button type="button" class="btn ghost-icon eps-row-remove" aria-label="Quitar remitente">✕</button>
+    <input type="text" class="f-agenda-nombre-paciente" placeholder="Nombre del paciente">
+    <select class="f-agenda-remitente">${opciones.map(r=>`<option value="${r.id}" data-tarifa="${r.tarifa}">${esc(r.nombre)}</option>`).join("")}</select>
+    <input type="number" class="f-agenda-valor" min="0" step="1000" placeholder="Valor">
+    <button type="button" class="btn ghost-icon eps-row-remove" aria-label="Quitar paciente">✕</button>
   `;
+  const selRem = row.querySelector(".f-agenda-remitente");
+  const inpValor = row.querySelector(".f-agenda-valor");
+  function aplicarValorPorDefecto(){
+    const opt = selRem.options[selRem.selectedIndex];
+    inpValor.value = opt ? opt.dataset.tarifa : 0;
+  }
+  aplicarValorPorDefecto(); // trae el valor por defecto del remitente ya seleccionado
+  selRem.addEventListener("change", aplicarValorPorDefecto); // al cambiar de remitente, sugiere su valor (se puede volver a editar)
   row.querySelector(".eps-row-remove").addEventListener("click", ()=> row.remove());
   wrap.appendChild(row);
   return row;
@@ -724,17 +520,27 @@ function resetAgendaFormRows(){
 function collectAgendaFormRows(){
   return Array.from(document.querySelectorAll("#f-agenda-rows .eps-row")).map(row=>{
     const remitenteId = row.querySelector(".f-agenda-remitente").value;
-    const cantidad = Number(row.querySelector(".f-agenda-cantidad").value || 0);
+    const nombrePaciente = row.querySelector(".f-agenda-nombre-paciente").value.trim();
+    const valor = Number(row.querySelector(".f-agenda-valor").value || 0);
+    const cantidadLegado = Number(row.dataset.legacyCantidad || 0);
     const rem = REMITENTES.find(r=>r.id === remitenteId);
-    return { remitenteId, nombre: rem ? rem.nombre : "", tarifa: rem ? rem.tarifa : 0, cantidad };
-  }).filter(d=>d.cantidad > 0);
+    if (nombrePaciente){
+      return { remitenteId, nombre: rem ? rem.nombre : "", tarifa: valor, cantidad: 1, nombrePaciente };
+    }
+    if (cantidadLegado > 0){
+      // Fila de un turno registrado antes de pedir nombre de paciente: se conserva
+      // agrupada por remitente tal cual estaba, sin inventar un nombre que no existe.
+      return { remitenteId, nombre: rem ? rem.nombre : "", tarifa: valor, cantidad: cantidadLegado, nombrePaciente: null };
+    }
+    return null; // fila vacía sin usar (ej. el turno se registra sin detalle todavía)
+  }).filter(Boolean);
 }
 function renderAgendaFormOptions(){
   const ent = currentFormEntidad();
   const opciones = ent ? remitentesDeEntidad(ent.id) : [];
   document.querySelectorAll(".f-agenda-remitente").forEach(sel=>{
     const cur = sel.value;
-    sel.innerHTML = opciones.map(r=>`<option value="${r.id}">${esc(r.nombre)}</option>`).join("");
+    sel.innerHTML = opciones.map(r=>`<option value="${r.id}" data-tarifa="${r.tarifa}">${esc(r.nombre)}</option>`).join("");
     if (opciones.some(o=>o.id===cur)) sel.value = cur;
   });
 }
@@ -806,7 +612,14 @@ function startEditTurno(id){
       const row = addAgendaFormRow();
       if (d){
         row.querySelector(".f-agenda-remitente").value = d.remitenteId;
-        row.querySelector(".f-agenda-cantidad").value = d.cantidad;
+        row.querySelector(".f-agenda-valor").value = d.tarifa;
+        if (d.nombrePaciente){
+          row.querySelector(".f-agenda-nombre-paciente").value = d.nombrePaciente;
+        } else {
+          // Fila de antes de pedir nombre de paciente: se conserva su cantidad agrupada
+          // (oculta) para no perderla si el usuario guarda sin tocar el detalle.
+          row.dataset.legacyCantidad = d.cantidad;
+        }
       }
     }
   }
@@ -1375,14 +1188,29 @@ document.addEventListener("DOMContentLoaded", ()=>{
   if (!sb){
     showLoginAlert("No se pudo cargar el sistema de acceso (revisa tu conexión a internet) y vuelve a intentar recargando la página.", "error");
     document.getElementById("btn-login").disabled = true;
+    document.getElementById("btn-signup").disabled = true;
     return;
   }
 
   document.getElementById("login-form").addEventListener("submit", handleLogin);
+  document.getElementById("signup-form").addEventListener("submit", handleSignup);
+  document.getElementById("link-show-signup").addEventListener("click", (e)=>{ e.preventDefault(); showSignupForm(); });
+  document.getElementById("link-show-login").addEventListener("click", (e)=>{ e.preventDefault(); showLoginForm(); });
   document.getElementById("btn-logout").addEventListener("click", handleLogout);
   sb.auth.onAuthStateChange((event, session)=>{
-    if (session) enterApp(); else showLoginScreen();
+    if (session) handleAuthenticated(); else showLoginScreen();
   });
+
+  document.getElementById("form-crear-proyecto").addEventListener("submit", handleCrearProyecto);
+  document.getElementById("form-vincular-proyecto").addEventListener("submit", handleVincularProyecto);
+  document.getElementById("btn-mostrar-crear-proyecto").addEventListener("click", mostrarFormCrearProyecto);
+  document.getElementById("btn-mostrar-vincular-proyecto").addEventListener("click", mostrarFormVincularProyecto);
+  document.querySelectorAll(".link-volver-proyecto").forEach(a=>{
+    a.addEventListener("click", (e)=>{ e.preventDefault(); mostrarOpcionesProyecto(); });
+  });
+  document.getElementById("btn-cambiar-proyecto").addEventListener("click", handleCambiarProyecto);
+  document.getElementById("link-logout-proyecto").addEventListener("click", (e)=>{ e.preventDefault(); handleLogout(); });
+  document.getElementById("btn-generar-invitacion").addEventListener("click", handleGenerarInvitacion);
 
   document.getElementById("f-entidad").addEventListener("change", ()=>{
     toggleFormFields();
@@ -1391,7 +1219,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
   });
 
   const dlgSettings = document.getElementById("dlg-settings");
-  document.getElementById("btn-open-settings").addEventListener("click", ()=> dlgSettings.showModal());
+  document.getElementById("btn-open-settings").addEventListener("click", ()=>{ dlgSettings.showModal(); renderMiembros(); });
   document.getElementById("btn-close-settings").addEventListener("click", ()=> dlgSettings.close());
   dlgSettings.addEventListener("click", (e)=>{ if (e.target === dlgSettings) dlgSettings.close(); });
 
