@@ -180,9 +180,16 @@ async function fetchCuentasCobro(){
   if (error){ showAlert("Error cargando el historial: " + error.message, "error"); return []; }
   return data.map(rowToCuenta);
 }
+// `row.numero` NO se envía: el número consecutivo lo asigna un trigger de la base
+// de datos (asignar_numero_cuenta_cobro), de forma atómica dentro de la misma
+// transacción de insert — así dos personas generando una cuenta de cobro casi al
+// mismo tiempo nunca pueden terminar con el mismo número. Se devuelve la fila
+// insertada completa para que el llamador sepa qué número le tocó.
 async function insertCuentaCobroDB(row){
-  const { error } = await sb.from("cuentas_cobro").insert({ ...row, proyecto_id: PROYECTO_ACTUAL.id });
+  const { numero, ...resto } = row;
+  const { data, error } = await sb.from("cuentas_cobro").insert({ ...resto, proyecto_id: PROYECTO_ACTUAL.id }).select().single();
   if (error) throw error;
+  return rowToCuenta(data);
 }
 async function deleteCuentaCobroDB(id){
   const { error } = await sb.from("cuentas_cobro").delete().eq("id", id);
@@ -202,14 +209,16 @@ async function fetchEntidades(){
   if (error){ showAlert("Error cargando entidades: " + error.message, "error"); return []; }
   return data.map(rowToEntidad);
 }
-async function insertEntidadDB(e){
-  const { error } = await sb.from("entidades").insert({ nombre:e.nombre, tipo:e.tipo, color:e.color, config:e.config, orden:e.orden, activo:e.activo, proyecto_id: PROYECTO_ACTUAL.id });
-  if (error) throw error;
-}
-async function updateEntidadDB(id, e){
-  // El tipo no se puede cambiar una vez creada la entidad: cambiarlo corrompería
-  // la validación y facturación de los turnos ya registrados con ese tipo.
-  const { error } = await sb.from("entidades").update({ nombre:e.nombre, color:e.color, config:e.config, activo:e.activo }).eq("id", id);
+// Guarda TODAS las filas del formulario en una sola operación (upsert masivo) en
+// vez de un insert/update por fila: si la conexión se cae a mitad de guardar
+// varias entidades, con un for-loop podían quedar unas guardadas y otras no — y
+// como el formulario no se enteraba de cuáles sí alcanzaron a insertarse, un
+// reintento podía duplicarlas. Un solo upsert es atómico: se guardan todas o
+// ninguna. `rows` ya trae el `tipo` correcto por fila (el llamador se encarga de
+// no dejarlo cambiar en filas existentes).
+async function upsertEntidadesDB(rows){
+  const payload = rows.map(r => ({ ...r, proyecto_id: PROYECTO_ACTUAL.id }));
+  const { error } = await sb.from("entidades").upsert(payload);
   if (error) throw error;
 }
 async function deleteEntidadDB(id){
@@ -222,19 +231,123 @@ function isForeignKeyError(e){
   return !!e && (e.code === "23503" || /foreign key|violates.*constraint/i.test(e.message || ""));
 }
 
+// ---------- Suscripción (plan de pago) ----------
+// El bloqueo REAL de escritura cuando vence ya lo hace Postgres a nivel de RLS (ver
+// suscripcion_activa() en la base) — nunca solo en pantalla. Esto de aquí es solo
+// para AVISAR con tiempo y para traducir el error crudo de RLS a un mensaje claro;
+// la lectura de datos ya guardados NUNCA se bloquea, esté vencida o no.
+let SUSCRIPCION = null; // { estado, venceEl, plan } del proyecto activo, o null si no cargó
+async function fetchSuscripcion(){
+  const { data, error } = await sb.from("suscripciones").select("*").eq("proyecto_id", PROYECTO_ACTUAL.id).maybeSingle();
+  if (error || !data){ SUSCRIPCION = null; return null; }
+  SUSCRIPCION = { estado: data.estado, venceEl: data.vence_el, plan: data.plan };
+  return SUSCRIPCION;
+}
+function diasParaVencer(venceEl){
+  if (!venceEl) return null;
+  return Math.ceil((new Date(venceEl).getTime() - Date.now()) / 86400000);
+}
+// Código/mensaje típico de PostgREST cuando una escritura choca contra una policy
+// de Row Level Security (código 42501). Puede deberse a otras causas, pero en la
+// práctica, una vez pasado el login y la elección de proyecto, casi siempre es la
+// suscripción vencida — por eso mensajeSiSuscripcionVencida() da ese diagnóstico.
+function isRlsBlockedError(e){
+  return !!e && (e.code === "42501" || /row-level security|permission denied for/i.test(e.message || ""));
+}
+function mensajeSiSuscripcionVencida(e){
+  if (!isRlsBlockedError(e)) return null;
+  return "No se pudo guardar: el período de prueba/plan de este proyecto está vencido. Lo ya guardado se sigue viendo con normalidad — contáctanos para renovar y volver a registrar o editar información.";
+}
+// Aviso en el encabezado de cada página (index/cuenta-cobro/cierre-anual) — requiere
+// un <div id="suscripcion-banner" class="alert" hidden></div> en el HTML. Silencioso
+// si el plan está en orden; solo avisa si falta poco para vencer o si ya venció.
+function renderSuscripcionBanner(){
+  const box = document.getElementById("suscripcion-banner");
+  if (!box) return;
+  if (!SUSCRIPCION){ box.hidden = true; return; }
+  const dias = diasParaVencer(SUSCRIPCION.venceEl);
+  const vencida = SUSCRIPCION.estado === "vencida" || SUSCRIPCION.estado === "cancelada" || (dias !== null && dias <= 0);
+  if (vencida){
+    box.hidden = false;
+    box.className = "alert error";
+    box.textContent = "⛔ El período de prueba/plan de este proyecto venció: ya no se puede registrar ni editar información nueva. Lo ya guardado se sigue viendo con normalidad — contáctanos para renovar.";
+    return;
+  }
+  if (SUSCRIPCION.estado === "prueba" && dias !== null && dias <= 7){
+    box.hidden = false;
+    box.className = "alert warning";
+    box.textContent = `🕒 El período de prueba de este proyecto vence en ${dias} día${dias===1?"":"s"}. Después de esa fecha no se podrá registrar ni editar información nueva (lo ya guardado se sigue viendo).`;
+    return;
+  }
+  box.hidden = true;
+}
+
+// ---------- Consentimiento legal (Habeas Data — Ley 1581 de 2012) ----------
+// Registro de que la persona aceptó explícitamente la política de tratamiento de
+// datos y los términos de uso (ver legal.html). Es POR CUENTA (auth.users), no por
+// proyecto: da igual a cuántos consultorios pertenezca, solo debe aceptar una vez
+// por versión vigente. Sube LEGAL_VERSION cuando cambie el texto de legal.html para
+// forzar una nueva aceptación en el próximo inicio de sesión de todo el mundo.
+const LEGAL_VERSION = "2026-09-07";
+async function tieneConsentimientoVigente(){
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return false;
+  const { data, error } = await sb.from("consentimientos_legales").select("id").eq("user_id", user.id).eq("version", LEGAL_VERSION).maybeSingle();
+  // Si falla la consulta (ej. sin conexión momentánea) no bloqueamos por eso — no es
+  // este el mecanismo de bloqueo real de datos, solo el de pedir la aceptación.
+  if (error) return true;
+  return !!data;
+}
+async function registrarConsentimiento(){
+  const { data: { user } } = await sb.auth.getUser();
+  const { error } = await sb.from("consentimientos_legales").insert({ user_id: user.id, version: LEGAL_VERSION });
+  if (error) throw error;
+}
+
+// ---------- Auditoría: quién hizo qué cambio y cuándo ----------
+// Solo lectura desde el cliente — la única forma de escribir en `auditoria` es el
+// trigger de la base de datos (fn_auditoria) sobre cada tabla operativa, nunca la
+// app. Por eso no hay ninguna función de "insertar auditoría" aquí: ese camino no
+// existe, ni siquiera para nosotros.
+const AUDITORIA_TABLA_LABEL = {
+  entidades:'Entidad', remitentes:'Remitente', turnos:'Turno', turno_detalle:'Detalle de turno',
+  deducciones:'Deducciones', prestador:'Tus datos (prestador)', entidad_facturacion:'Datos de facturación',
+  cuentas_cobro:'Cuenta de cobro',
+};
+const AUDITORIA_OPERACION_LABEL = { INSERT:'Creó', UPDATE:'Editó', DELETE:'Eliminó' };
+async function fetchAuditoria(limite){
+  const { data, error } = await sb.from("auditoria").select("*").eq("proyecto_id", PROYECTO_ACTUAL.id).order("creado_el", { ascending:false }).limit(limite || 100);
+  if (error){ showAlert("Error cargando el historial de cambios: " + error.message, "error"); return []; }
+  return data;
+}
+// Un detalle corto e identificable del registro afectado, según la tabla — solo
+// para que el historial sea legible de un vistazo, no un resumen exhaustivo.
+function resumenAuditoria(row){
+  const d = row.datos_nuevos || row.datos_anteriores || {};
+  switch (row.tabla){
+    case 'entidades': return d.nombre || '';
+    case 'remitentes': return d.nombre || '';
+    case 'turnos': return d.fecha ? `${d.fecha} ${(d.inicio||'').slice(0,5)}–${(d.fin||'').slice(0,5)}` : '';
+    case 'cuentas_cobro': return d.numero != null ? `N° ${String(d.numero).padStart(3,'0')}` : '';
+    case 'prestador': return d.nombre || '';
+    case 'entidad_facturacion': return d.razon_social || '';
+    case 'turno_detalle': return d.nombre_paciente || '';
+    default: return '';
+  }
+}
+
 // ---------- Remitentes (entidades tipo "por_agenda": EPS, aseguradoras, Particular, Póliza...) ----------
 async function fetchRemitentes(){
   const { data, error } = await sb.from("remitentes").select("*").eq("proyecto_id", PROYECTO_ACTUAL.id).eq("activo", true).order("orden");
   if (error){ showAlert("Error cargando remitentes: " + error.message, "error"); return []; }
   return data.map(r => ({ id: r.id, nombre: r.nombre, tarifa: Number(r.tarifa), orden: r.orden, entidadId: r.entidad_id }));
 }
-async function insertRemitenteDB(entidadId, nombre, tarifa){
-  const orden = remitentesDeEntidad(entidadId).length;
-  const { error } = await sb.from("remitentes").insert({ nombre, tarifa, orden, activo:true, entidad_id: entidadId, proyecto_id: PROYECTO_ACTUAL.id });
-  if (error) throw error;
-}
-async function updateRemitenteDB(id, nombre, tarifa){
-  const { error } = await sb.from("remitentes").update({ nombre, tarifa }).eq("id", id);
+// Mismo motivo que upsertEntidadesDB: un solo upsert atómico en vez de un
+// insert/update por fila, para no arriesgar guardados parciales ni duplicados en
+// un reintento tras un error de red a mitad del guardado.
+async function upsertRemitentesDB(rows){
+  const payload = rows.map(r => ({ ...r, proyecto_id: PROYECTO_ACTUAL.id }));
+  const { error } = await sb.from("remitentes").upsert(payload);
   if (error) throw error;
 }
 
@@ -274,52 +387,63 @@ function turnoToRow(t){
     proyecto_id: PROYECTO_ACTUAL.id,
   };
 }
-async function saveDetalle(turnoId, detalle){
-  const rows = (detalle || []).filter(d => d.cantidad > 0 && d.remitenteId).map(d => ({
-    turno_id: turnoId, remitente_id: d.remitenteId, cantidad: d.cantidad,
+// Arma el detalle de un turno como jsonb para las RPC atómicas de abajo.
+function detalleToJsonb(detalle){
+  return (detalle || []).filter(d => d.cantidad > 0 && d.remitenteId).map(d => ({
+    remitente_id: d.remitenteId, cantidad: d.cantidad,
     nombre_paciente: d.nombrePaciente || null,
     valor: d.tarifa != null ? d.tarifa : null,
-    proyecto_id: PROYECTO_ACTUAL.id,
   }));
-  if (rows.length === 0) return;
-  const { error } = await sb.from("turno_detalle").insert(rows);
-  if (error) throw error;
 }
 async function fetchTurnos(){
   const { data, error } = await sb.from("turnos").select(TURNO_SELECT).eq("proyecto_id", PROYECTO_ACTUAL.id).order("fecha").order("inicio");
   if (error){ showAlert("Error cargando turnos: " + error.message, "error"); return []; }
   return data.map(rowToTurno);
 }
+// Encabezado + detalle se crean en UNA sola transacción de Postgres (RPC
+// crear_turno_con_detalle) — antes eran 2 llamadas HTTP separadas: si la
+// conexión fallaba justo entre insertar el turno y guardar su detalle, quedaba
+// un turno "huérfano" sin sus pacientes/remitentes.
 async function insertTurnoDB(t){
-  const { data, error } = await sb.from("turnos").insert(turnoToRow(t)).select().single();
+  const { data: id, error } = await sb.rpc("crear_turno_con_detalle", {
+    p_proyecto_id: PROYECTO_ACTUAL.id, p_entidad_id: t.entidadId, p_fecha: t.fecha,
+    p_inicio: t.inicio, p_fin: t.fin, p_sede: t.sede || null,
+    p_detalle: detalleToJsonb(t.detalle),
+  });
   if (error) throw error;
-  if (t.detalle && t.detalle.length) await saveDetalle(data.id, t.detalle);
-  const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).eq("id", data.id).single();
+  const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).eq("id", id).single();
   if (err2) throw err2;
   return rowToTurno(full);
 }
+// Todo el lote (encabezados + detalle de cada turno) se crea en UNA sola
+// transacción (RPC importar_turnos_lote) — antes eran 2+ llamadas HTTP (un
+// insert de encabezados + un insert de detalle por cada turno del lote), así
+// que una falla de red a mitad de la importación podía dejar turnos ya creados
+// sin su detalle. Con la RPC, o se guarda el lote completo, o ninguno.
 async function insertTurnosBulkDB(list){
-  const { data, error } = await sb.from("turnos").insert(list.map(turnoToRow)).select();
+  const payload = list.map(t => ({
+    entidad_id: t.entidadId, fecha: t.fecha, inicio: t.inicio, fin: t.fin, sede: t.sede || null,
+    detalle: detalleToJsonb(t.detalle),
+  }));
+  const { data, error } = await sb.rpc("importar_turnos_lote", { p_proyecto_id: PROYECTO_ACTUAL.id, p_turnos: payload });
   if (error) throw error;
-  // Supabase devuelve las filas insertadas en el mismo orden que se enviaron.
-  for (let i = 0; i < data.length; i++){
-    if (list[i].detalle && list[i].detalle.length){
-      await saveDetalle(data[i].id, list[i].detalle);
-    }
-  }
   const ids = data.map(r => r.id);
   const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).in("id", ids);
   if (err2) throw err2;
   return full.map(rowToTurno);
 }
+// Igual que insertTurnoDB: actualizar el encabezado y reemplazar el detalle
+// (borrar lo anterior + insertar lo nuevo) corre como UNA sola transacción
+// (RPC actualizar_turno_con_detalle) — antes, si la conexión fallaba justo
+// entre el DELETE y el INSERT, el turno se quedaba SIN NINGÚN detalle (pérdida
+// real de datos ya guardados, no solo un guardado incompleto).
 async function updateTurnoDB(id, t){
-  const { error } = await sb.from("turnos").update(turnoToRow(t)).eq("id", id);
+  const { error } = await sb.rpc("actualizar_turno_con_detalle", {
+    p_turno_id: id, p_entidad_id: t.entidadId, p_fecha: t.fecha,
+    p_inicio: t.inicio, p_fin: t.fin, p_sede: t.sede || null,
+    p_detalle: detalleToJsonb(t.detalle),
+  });
   if (error) throw error;
-  // El detalle por remitente se reemplaza por completo: se borra lo anterior y se
-  // inserta lo nuevo, así no hace falta comparar filas una por una.
-  const { error: delErr } = await sb.from("turno_detalle").delete().eq("turno_id", id);
-  if (delErr) throw delErr;
-  if (t.detalle && t.detalle.length) await saveDetalle(id, t.detalle);
   const { data: full, error: err2 } = await sb.from("turnos").select(TURNO_SELECT).eq("id", id).single();
   if (err2) throw err2;
   return rowToTurno(full);
@@ -330,6 +454,18 @@ async function deleteTurnoDB(id){
 }
 
 // ---------- Helpers de fecha/hora ----------
+// `new Date().toISOString().slice(0,10)` da la fecha en UTC, no la del usuario —
+// en Colombia (UTC-5), desde las 7pm hora local eso ya cae en el DÍA SIGUIENTE en
+// UTC, así que "hoy" quedaría mal (ej. registrar un turno nocturno a las 8pm
+// precargaría la fecha de mañana). Esta función arma el ISO con los componentes
+// LOCALES del Date (getFullYear/getMonth/getDate), nunca con UTC.
+function getLocalDateISO(d){
+  d = d || new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 function parseTimeParts(hhmm){
   const [h,m] = hhmm.split(":").map(Number);
   return [h,m,0,0];
@@ -380,7 +516,7 @@ function franjaBlocksInRange(start, end){
   let d = new Date(start); d.setHours(0,0,0,0);
   const last = new Date(end);
   while (d.getTime() <= last.getTime()){
-    const iso = d.toISOString().slice(0,10);
+    const iso = getLocalDateISO(d);
     for (const ent of franjaEntidades){
       const b = franjaBlockForDate(ent, iso);
       if (b) blocks.push(b);

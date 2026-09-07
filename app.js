@@ -16,6 +16,7 @@ function showLoginAlert(msg, type){
 function showLoginScreen(){
   document.getElementById("app-root").hidden = true;
   document.getElementById("proyecto-screen").hidden = true;
+  document.getElementById("consentimiento-screen").hidden = true;
   document.getElementById("login-screen").hidden = false;
   document.getElementById("login-password").value = "";
   showLoginForm(); // al volver a la pantalla de acceso (ej. tras salir), siempre arranca en login, no en registro
@@ -87,6 +88,14 @@ async function entrarAProyecto(proyecto){
 // tiene uno guardado o pertenece a exactamente uno) o pide elegir/crear/vincularse.
 async function handleAuthenticated(){
   document.getElementById("login-screen").hidden = true;
+  // Habeas Data: nadie sigue de largo (ni cuenta nueva, ni cuenta ya existente desde
+  // antes de que esto existiera) sin aceptar explícitamente la política vigente.
+  if (!(await tieneConsentimientoVigente())){
+    document.getElementById("proyecto-screen").hidden = true;
+    document.getElementById("app-root").hidden = true;
+    document.getElementById("consentimiento-screen").hidden = false;
+    return;
+  }
   const { activo, lista } = await resolverProyectoActivo();
   if (activo){
     document.getElementById("proyecto-screen").hidden = true;
@@ -95,6 +104,26 @@ async function handleAuthenticated(){
   }
   showProyectoScreen();
   renderProyectoLista(lista);
+}
+function showConsentimientoAlert(msg, type){
+  const box = document.getElementById("consentimiento-alert");
+  box.hidden = false;
+  box.className = "alert " + type;
+  box.textContent = (type === "error" ? "⚠️ " : "✅ ") + msg;
+}
+async function handleAceptarConsentimiento(e){
+  e.preventDefault();
+  const btn = document.getElementById("btn-aceptar-consentimiento");
+  btn.disabled = true;
+  try{
+    await registrarConsentimiento();
+    document.getElementById("consentimiento-screen").hidden = true;
+    await handleAuthenticated(); // ahora sí, con el consentimiento ya registrado
+  }catch(err){
+    showConsentimientoAlert("No se pudo registrar tu aceptación: " + err.message, "error");
+  }finally{
+    btn.disabled = false;
+  }
 }
 async function handleCrearProyecto(e){
   e.preventDefault();
@@ -144,6 +173,23 @@ async function renderMiembros(){
   document.getElementById("invitacion-codigo").hidden = true;
   document.getElementById("invitacion-hint").textContent = "";
 }
+async function renderAuditoria(){
+  const [filas, miembros] = await Promise.all([ fetchAuditoria(100), fetchMiembrosProyecto(PROYECTO_ACTUAL.id) ]);
+  const emailPorUid = {};
+  for (const m of miembros) emailPorUid[m.userId] = m.email;
+  const tbody = document.getElementById("auditoria-rows");
+  if (!filas.length){
+    tbody.innerHTML = `<tr><td colspan="5" class="hint">Todavía no hay cambios registrados.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filas.map(row => {
+    const fecha = new Date(row.creado_el).toLocaleString("es-CO", { dateStyle:"short", timeStyle:"short" });
+    const quien = row.user_id ? (emailPorUid[row.user_id] || "(persona ya no vinculada)") : "—";
+    const accion = AUDITORIA_OPERACION_LABEL[row.operacion] || row.operacion;
+    const tabla = AUDITORIA_TABLA_LABEL[row.tabla] || row.tabla;
+    return `<tr><td>${esc(fecha)}</td><td>${esc(quien)}</td><td>${esc(accion)}</td><td>${esc(tabla)}</td><td>${esc(resumenAuditoria(row))}</td></tr>`;
+  }).join("");
+}
 async function handleGenerarInvitacion(){
   try{
     const codigo = await generarInvitacion(PROYECTO_ACTUAL.id);
@@ -164,6 +210,9 @@ async function enterApp(){
   const { data: { user } } = await sb.auth.getUser();
   document.getElementById("user-email-label").textContent = user ? user.email : "";
 
+  await fetchSuscripcion();
+  renderSuscripcionBanner();
+
   ENTIDADES = await fetchEntidades();
   REMITENTES = await fetchRemitentes();
   TURNOS = await fetchTurnos();
@@ -175,8 +224,8 @@ async function enterApp(){
   renderImportEntidadOptions();
   loadDeduccionesIntoForm();
 
-  document.getElementById("f-fecha").value = new Date().toISOString().slice(0,10);
-  document.getElementById("filter-month").value = new Date().toISOString().slice(0,7);
+  document.getElementById("f-fecha").value = getLocalDateISO();
+  document.getElementById("filter-month").value = getLocalDateISO().slice(0,7);
 
   renderAll();
 }
@@ -268,11 +317,11 @@ function renderAgenda(){
         <button class="btn secondary btn-sm" data-edit="${t.id}">Editar</button>
         <button class="btn danger-link" data-del="${t.id}">Eliminar</button>
       </td>
-      <td>${t.fecha}</td>
+      <td>${esc(t.fecha)}</td>
       <td>${DIAS[d.getDay()]}</td>
       <td><span class="badge" style="--badge-color:${color}">${esc(nombre)}</span></td>
-      <td>${t.inicio}</td>
-      <td>${t.fin}</td>
+      <td>${esc(t.inicio)}</td>
+      <td>${esc(t.fin)}</td>
       <td>${fmtHours(calc.horas)}</td>
       <td>${calc.subtotal ? fmtMoney(calc.subtotal) : "—"}</td>
       <td>${esc(calc.detalle)}</td>
@@ -371,7 +420,7 @@ function renderResumen(){
 }
 
 // ---------- Calendario mensual ----------
-let calendarMonth = new Date().toISOString().slice(0,7); // "YYYY-MM"
+let calendarMonth = getLocalDateISO().slice(0,7); // "YYYY-MM"
 
 function renderCalendar(){
   const [y, m] = calendarMonth.split("-").map(Number);
@@ -383,7 +432,7 @@ function renderCalendar(){
   const gridStart = new Date(firstOfMonth);
   gridStart.setDate(gridStart.getDate() - firstWeekday);
 
-  const todayISO = new Date().toISOString().slice(0,10);
+  const todayISO = getLocalDateISO();
   const byDate = {};
   for (const t of TURNOS) (byDate[t.fecha] = byDate[t.fecha] || []).push(t);
   for (const arr of Object.values(byDate)) arr.sort((a,b)=> a.inicio.localeCompare(b.inicio));
@@ -391,7 +440,7 @@ function renderCalendar(){
   let html = "";
   const cursor = new Date(gridStart);
   for (let i = 0; i < 42; i++){
-    const iso = cursor.toISOString().slice(0,10);
+    const iso = getLocalDateISO(cursor);
     const inMonth = cursor.getMonth() === monthIndex0;
     const isToday = iso === todayISO;
     const franjaEnts = franjaEntidadesForDate(iso);
@@ -419,7 +468,7 @@ function renderCalendar(){
       const ent = getEntidad(t.entidadId);
       const nombre = ent ? ent.nombre : "?";
       const color = ent ? ent.color : "#94a3b8";
-      const title = `${nombre} ${t.inicio}–${t.fin} · ${calc.detalle}${calc.subtotal ? " · " + fmtMoney(calc.subtotal) : ""}`;
+      const title = `${nombre} ${esc(t.inicio)}–${esc(t.fin)} · ${calc.detalle}${calc.subtotal ? " · " + fmtMoney(calc.subtotal) : ""}`;
       return `<button type="button" class="cal-chip" style="--chip-color:${color}" data-del="${t.id}" title="${esc(title)} — clic para eliminar">${t.inicio}–${t.fin} ${esc(nombre)}</button>`;
     }).join("");
 
@@ -453,7 +502,7 @@ function renderCalendar(){
 function shiftCalendarMonth(delta){
   const [y,m] = calendarMonth.split("-").map(Number);
   const d = new Date(y, m-1+delta, 1);
-  calendarMonth = d.toISOString().slice(0,7);
+  calendarMonth = getLocalDateISO(d).slice(0,7);
   renderCalendar();
 }
 
@@ -582,7 +631,7 @@ async function handleAddTurno(){
     }
     renderAll();
   }catch(e){
-    showAlert("Error guardando el turno: " + e.message, "error");
+    showAlert(mensajeSiSuscripcionVencida(e) || ("Error guardando el turno: " + e.message), "error");
   }
 }
 
@@ -632,7 +681,7 @@ function cancelEditTurno(){
   editingTurnoId = null;
   document.getElementById("btn-add-turno").textContent = "Registrar turno";
   document.getElementById("btn-cancel-edit").hidden = true;
-  document.getElementById("f-fecha").value = new Date().toISOString().slice(0,10);
+  document.getElementById("f-fecha").value = getLocalDateISO();
   document.getElementById("f-inicio").value = "";
   document.getElementById("f-fin").value = "";
   document.getElementById("f-sede").value = "";
@@ -726,17 +775,27 @@ function addEntidadMaestroRow(){
 async function saveEntidadesMaestro(){
   const rows = Array.from(document.querySelectorAll("#entidades-rows tr"));
   try{
+    const payload = [];
+    let nuevoOrden = ENTIDADES.length; // filas nuevas del mismo guardado quedan en orden de aparición, no todas con el mismo número
     for (const tr of rows){
       const nombre = tr.querySelector(".ent-nombre").value.trim();
       if (!nombre) continue;
-      const tipo = tr.dataset.tipo;
+      const id = tr.dataset.id;
+      const actual = id ? getEntidad(id) : null;
+      // El tipo no se puede cambiar una vez creada la entidad: en filas existentes
+      // se conserva el que ya tenía, nunca el del selector (que queda deshabilitado
+      // en pantalla, pero por si acaso).
+      const tipo = actual ? actual.tipo : tr.dataset.tipo;
       const color = tr.querySelector(".ent-color").value;
       const activo = tr.querySelector(".ent-activo").checked;
       const config = collectEntidadConfigFromRow(tr, tipo);
-      const id = tr.dataset.id;
-      if (id) await updateEntidadDB(id, { nombre, color, activo, config });
-      else await insertEntidadDB({ nombre, tipo, color, config, orden: ENTIDADES.length, activo });
+      payload.push({
+        ...(id ? { id } : {}),
+        nombre, tipo, color, config, activo,
+        orden: actual ? actual.orden : nuevoOrden++,
+      });
     }
+    if (payload.length) await upsertEntidadesDB(payload);
     ENTIDADES = await fetchEntidades();
     renderEntidadesMaestro();
     renderRemitenteEntidadSelector();
@@ -745,7 +804,7 @@ async function saveEntidadesMaestro(){
     showAlert("Entidades guardadas.", "ok");
     renderAll();
   }catch(e){
-    showAlert("Error guardando entidades: " + e.message, "error");
+    showAlert(mensajeSiSuscripcionVencida(e) || ("Error guardando entidades: " + e.message), "error");
   }
 }
 async function handleDeleteEntidad(id){
@@ -764,6 +823,8 @@ async function handleDeleteEntidad(id){
   }catch(e){
     if (isForeignKeyError(e)){
       showAlert(`No se puede eliminar "${nombre}": todavía tiene turnos o remitentes asociados. Desactívala (destilda "Activa" y guarda) en vez de eliminarla.`, "error");
+    } else if (mensajeSiSuscripcionVencida(e)){
+      showAlert(mensajeSiSuscripcionVencida(e), "error");
     } else {
       showAlert(`Error eliminando "${nombre}": ` + e.message, "error");
     }
@@ -794,7 +855,7 @@ async function handleSaveDeducciones(){
     showAlert("Deducciones guardadas.", "ok");
     renderAll();
   }catch(e){
-    showAlert("Error guardando deducciones: " + e.message, "error");
+    showAlert(mensajeSiSuscripcionVencida(e) || ("Error guardando deducciones: " + e.message), "error");
   }
 }
 
@@ -837,21 +898,28 @@ async function saveRemitentesMaestro(){
   }
   const rows = Array.from(document.querySelectorAll("#remitentes-rows tr"));
   try{
+    const payload = [];
+    let nuevoOrden = remitentesDeEntidad(entidadId).length; // ídem: filas nuevas del mismo guardado no repiten orden
     for (const row of rows){
       const nombre = row.querySelector(".rem-nombre").value.trim();
       const tarifa = Number(row.querySelector(".rem-tarifa").value || 0);
       if (!nombre) continue;
       const id = row.dataset.id;
-      if (id) await updateRemitenteDB(id, nombre, tarifa);
-      else await insertRemitenteDB(entidadId, nombre, tarifa);
+      const actual = id ? REMITENTES.find(r=>r.id===id) : null;
+      payload.push({
+        ...(id ? { id } : {}),
+        nombre, tarifa, activo: true, entidad_id: entidadId,
+        orden: actual ? actual.orden : nuevoOrden++,
+      });
     }
+    if (payload.length) await upsertRemitentesDB(payload);
     REMITENTES = await fetchRemitentes();
     renderRemitentesMaestro();
     renderAgendaFormOptions();
     showAlert("Remitentes guardados.", "ok");
     renderAll();
   }catch(e){
-    showAlert("Error guardando remitentes: " + e.message, "error");
+    showAlert(mensajeSiSuscripcionVencida(e) || ("Error guardando remitentes: " + e.message), "error");
   }
 }
 
@@ -1117,7 +1185,7 @@ async function commitImport(){
 
 // ---------- Exportación cierre de mes ----------
 function toCsv(){
-  const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
+  const month = document.getElementById("filter-month").value || getLocalDateISO().slice(0,7);
   const list = TURNOS.filter(t => t.fecha.slice(0,7) === month)
     .sort((a,b)=> turnoInterval(a).start - turnoInterval(b).start);
   const rows = [["Fecha","Entidad","Sede","Inicio","Fin","Horas","Detalle","Bruto","Seg. Social","Vacaciones","Cesantías","Retefuente","Neto"]];
@@ -1153,7 +1221,7 @@ function downloadExcel(){
     showAlert("No se pudo cargar la librería de Excel (sin conexión a internet). Usa CSV mientras tanto.", "error");
     return;
   }
-  const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
+  const month = document.getElementById("filter-month").value || getLocalDateISO().slice(0,7);
   const list = TURNOS.filter(t => t.fecha.slice(0,7) === month)
     .sort((a,b)=> turnoInterval(a).start - turnoInterval(b).start);
 
@@ -1201,6 +1269,9 @@ document.addEventListener("DOMContentLoaded", ()=>{
     if (session) handleAuthenticated(); else showLoginScreen();
   });
 
+  document.getElementById("form-consentimiento").addEventListener("submit", handleAceptarConsentimiento);
+  document.getElementById("link-logout-consentimiento").addEventListener("click", (e)=>{ e.preventDefault(); handleLogout(); });
+
   document.getElementById("form-crear-proyecto").addEventListener("submit", handleCrearProyecto);
   document.getElementById("form-vincular-proyecto").addEventListener("submit", handleVincularProyecto);
   document.getElementById("btn-mostrar-crear-proyecto").addEventListener("click", mostrarFormCrearProyecto);
@@ -1219,7 +1290,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
   });
 
   const dlgSettings = document.getElementById("dlg-settings");
-  document.getElementById("btn-open-settings").addEventListener("click", ()=>{ dlgSettings.showModal(); renderMiembros(); });
+  document.getElementById("btn-open-settings").addEventListener("click", ()=>{ dlgSettings.showModal(); renderMiembros(); renderAuditoria(); });
   document.getElementById("btn-close-settings").addEventListener("click", ()=> dlgSettings.close());
   dlgSettings.addEventListener("click", (e)=>{ if (e.target === dlgSettings) dlgSettings.close(); });
 
@@ -1267,12 +1338,12 @@ document.addEventListener("DOMContentLoaded", ()=>{
   document.getElementById("cal-prev").addEventListener("click", ()=> shiftCalendarMonth(-1));
   document.getElementById("cal-next").addEventListener("click", ()=> shiftCalendarMonth(1));
   document.getElementById("cal-today").addEventListener("click", ()=>{
-    calendarMonth = new Date().toISOString().slice(0,7);
+    calendarMonth = getLocalDateISO().slice(0,7);
     renderCalendar();
   });
 
   document.getElementById("btn-export-csv").addEventListener("click", ()=>{
-    const month = document.getElementById("filter-month").value || new Date().toISOString().slice(0,7);
+    const month = document.getElementById("filter-month").value || getLocalDateISO().slice(0,7);
     downloadFile(`cierre-mes-${month}.csv`, toCsv(), "text/csv;charset=utf-8;");
   });
   document.getElementById("btn-export-xlsx").addEventListener("click", downloadExcel);

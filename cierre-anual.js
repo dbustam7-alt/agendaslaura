@@ -314,12 +314,12 @@ function renderCierre(anio){
       const pagada = c.estado === "pagada";
       return `<tr>
         <td>${String(c.numero).padStart(3,"0")}</td>
-        <td>${c.fechaEmision}</td>
+        <td>${esc(c.fechaEmision)}</td>
         <td>${esc(nombre)}</td>
         <td>${fmtMoney(c.total)}</td>
         <td>${fmtMoney(c.neto)}</td>
         <td><span class="imp-status ${pagada ? "ok" : "conflict"}">${pagada ? "Pagada" : "Pendiente"}</span></td>
-        <td>${c.fechaPago || "—"}</td>
+        <td>${esc(c.fechaPago) || "—"}</td>
       </tr>`;
     }).join("");
     detalleWrap.hidden = false;
@@ -348,13 +348,23 @@ function showNeedsProject(){
   document.getElementById("needs-login").hidden = false;
   document.getElementById("ca-root").hidden = true;
 }
+function showNeedsConsent(){
+  document.getElementById("needs-login-text").textContent = "Antes de continuar, debes aceptar la política de tratamiento de datos en la app principal.";
+  document.getElementById("needs-login").hidden = false;
+  document.getElementById("ca-root").hidden = true;
+}
 async function enterPage(){
+  // Habeas Data: el formulario para aceptar la política solo vive en index.html.
+  if (!(await tieneConsentimientoVigente())){ showNeedsConsent(); return; }
   const { activo } = await resolverProyectoActivo();
   if (!activo){ showNeedsProject(); return; }
 
   document.getElementById("needs-login").hidden = true;
   document.getElementById("ca-root").hidden = false;
   document.getElementById("ca-proyecto-nombre").textContent = activo.nombre;
+
+  await fetchSuscripcion();
+  renderSuscripcionBanner();
 
   ENTIDADES = await fetchEntidades();
   CUENTAS = await fetchCuentasCobro();

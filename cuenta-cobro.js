@@ -79,16 +79,10 @@ async function upsertFacturacionDB(entidadId, data){
 
 // El próximo número siempre es (el más alto que quede) + 1 — así borrar una de prueba
 // libera su número para la próxima vez, sin arriesgar que dos cuentas de cobro
-// terminen compartiendo el mismo número.
-async function recomputeSiguienteNumero(){
-  const maxNumero = CUENTAS.reduce((m,c)=> Math.max(m, c.numero), 0);
-  const correcto = maxNumero + 1;
-  if (PRESTADOR.siguienteNumero !== correcto){
-    PRESTADOR.siguienteNumero = correcto;
-    document.getElementById("pr-siguiente-numero").value = correcto;
-    await bumpSiguienteNumero(correcto);
-  }
-}
+// terminen compartiendo el mismo número. Este recálculo YA NO se hace desde el
+// cliente: un trigger AFTER DELETE (fn_reajustar_consecutivo_delete) lo hace
+// dentro de la misma transacción del borrado — el cliente solo tiene que volver
+// a leer `prestador` (ver handleDeleteCuenta) para reflejar el valor oficial.
 // Chequeo de seguridad al cargar (no al borrar): si el número guardado ya se quedó
 // corto frente a lo que hay (nunca debería pasar, pero por si acaso) lo sube para
 // no arriesgar un choque de números — nunca lo baja solo por cargar la página.
@@ -194,7 +188,7 @@ async function handleSavePrestador(){
     await savePrestadorDB(PRESTADOR);
     showAlert("Tus datos se guardaron.", "ok");
   }catch(e){
-    showAlert("Error guardando tus datos: " + e.message, "error");
+    showAlert(mensajeSiSuscripcionVencida(e) || ("Error guardando tus datos: " + e.message), "error");
   }
 }
 
@@ -232,7 +226,7 @@ async function handleSaveFacturacion(){
     FACTURACION = await fetchFacturacionAll();
     showAlert("Datos de facturación guardados.", "ok");
   }catch(e){
-    showAlert("Error guardando datos de facturación: " + e.message, "error");
+    showAlert(mensajeSiSuscripcionVencida(e) || ("Error guardando datos de facturación: " + e.message), "error");
   }
 }
 
@@ -387,15 +381,16 @@ async function handleGenerar(){
   }
 
   try{
-    const numero = PRESTADOR.siguienteNumero;
-    const fechaEmision = new Date().toISOString().slice(0,10);
+    const fechaEmision = getLocalDateISO();
     const entidadIds = entidades.map(e=>e.id);
     // Las deducciones y el neto quedan congelados con los % vigentes HOY — así el
     // cierre anual nunca se distorsiona si más adelante cambian esos porcentajes.
     const ded = calcDeducciones(previewLineas.total);
 
-    await insertCuentaCobroDB({
-      numero,
+    // El número consecutivo NO se calcula aquí: lo asigna de forma atómica un
+    // trigger de la base de datos al insertar (ver asignar_numero_cuenta_cobro),
+    // así dos personas generando una cuenta de cobro a la vez nunca chocan.
+    const guardada = await insertCuentaCobroDB({
       entidad_id: entidadIds[0],
       entidad_ids: entidadIds,
       fecha_emision: fechaEmision,
@@ -409,7 +404,9 @@ async function handleGenerar(){
       deducciones_snapshot: { segSocial: ded.segSocial, vacaciones: ded.vacaciones, cesantias: ded.cesantias, retefuente: ded.retefuente, total: ded.total },
       neto: ded.neto,
     });
-    await bumpSiguienteNumero(numero + 1);
+    const numero = guardada.numero;
+    // El trigger ya subió prestador.siguiente_numero en la base — aquí solo se
+    // refleja en pantalla, no se vuelve a escribir (evitaría doble incremento).
     PRESTADOR.siguienteNumero = numero + 1;
     document.getElementById("pr-siguiente-numero").value = PRESTADOR.siguienteNumero;
 
@@ -419,7 +416,7 @@ async function handleGenerar(){
     showAlert(`Cuenta de cobro N° ${String(numero).padStart(3,"0")} generada.`, "ok");
     document.getElementById("invoice-wrap").scrollIntoView({behavior:"smooth", block:"start"});
   }catch(e){
-    showAlert("Error generando la cuenta de cobro: " + e.message, "error");
+    showAlert(mensajeSiSuscripcionVencida(e) || ("Error generando la cuenta de cobro: " + e.message), "error");
   }
 }
 
@@ -470,12 +467,12 @@ function renderHistorial(){
     const pagada = c.estado === "pagada";
     return `<tr>
       <td>${String(c.numero).padStart(3,"0")}</td>
-      <td>${c.fechaEmision}</td>
+      <td>${esc(c.fechaEmision)}</td>
       <td>${esc(nombre)}</td>
-      <td>${c.periodoDesde} – ${c.periodoHasta}</td>
+      <td>${esc(c.periodoDesde)} – ${esc(c.periodoHasta)}</td>
       <td>${fmtMoney(c.total)}</td>
       <td><span class="imp-status ${pagada ? "ok" : "conflict"}">${pagada ? "Pagada" : "Pendiente"}</span></td>
-      <td>${c.fechaPago || "—"}</td>
+      <td>${esc(c.fechaPago) || "—"}</td>
       <td style="white-space:nowrap;">
         <button type="button" class="btn secondary btn-sm" data-ver="${c.id}">Ver / Reimprimir</button>
         <button type="button" class="btn secondary btn-sm" data-toggle-estado="${c.id}">${pagada ? "Marcar pendiente" : "Marcar pagada"}</button>
@@ -502,18 +499,38 @@ function renderHistorial(){
     btn.addEventListener("click", ()=> handleDeleteCuenta(btn.dataset.del));
   });
 }
+// Marcar "pagada" pide la fecha con un modal propio (en vez de window.prompt,
+// que bloquea el hilo de JS y no combina con el resto de la interfaz) — ver
+// abrirDialogoFechaPago()/handleConfirmarFechaPago().
 async function handleToggleEstado(id){
   const c = CUENTAS.find(x=>x.id === id);
   if (!c) return;
-  try{
-    if (c.estado === "pagada"){
+  if (c.estado === "pagada"){
+    try{
       await updateEstadoCuentaDB(id, "pendiente", null);
-    } else {
-      const hoy = new Date().toISOString().slice(0,10);
-      const fecha = prompt(`Fecha de pago de la cuenta de cobro N° ${String(c.numero).padStart(3,"0")}:`, hoy);
-      if (fecha === null) return; // canceló
-      await updateEstadoCuentaDB(id, "pagada", fecha || hoy);
+      CUENTAS = await fetchCuentasCobro();
+      renderHistorial();
+    }catch(e){
+      showAlert("Error actualizando el estado de pago: " + e.message, "error");
     }
+    return;
+  }
+  abrirDialogoFechaPago(c);
+}
+let cuentaPendienteMarcar = null;
+function abrirDialogoFechaPago(c){
+  cuentaPendienteMarcar = c;
+  document.getElementById("fecha-pago-texto").textContent = `Fecha de pago de la cuenta de cobro N° ${String(c.numero).padStart(3,"0")}:`;
+  document.getElementById("fecha-pago-input").value = getLocalDateISO();
+  document.getElementById("dlg-fecha-pago").showModal();
+}
+async function handleConfirmarFechaPago(){
+  const c = cuentaPendienteMarcar;
+  if (!c) return;
+  const fecha = document.getElementById("fecha-pago-input").value || getLocalDateISO();
+  document.getElementById("dlg-fecha-pago").close();
+  try{
+    await updateEstadoCuentaDB(c.id, "pagada", fecha);
     CUENTAS = await fetchCuentasCobro();
     renderHistorial();
   }catch(e){
@@ -526,8 +543,12 @@ async function handleDeleteCuenta(id){
   if (!confirm(`¿Eliminar definitivamente la cuenta de cobro N° ${String(c.numero).padStart(3,"0")}?\n\nEsto no se puede deshacer. El próximo número se ajusta solo para no dejar huecos raros.`)) return;
   try{
     await deleteCuentaCobroDB(id);
+    // El trigger AFTER DELETE ya reajustó prestador.siguiente_numero dentro de
+    // la misma transacción del borrado — aquí solo se vuelve a leer el valor
+    // oficial, nunca se calcula ni se escribe desde el cliente.
     CUENTAS = await fetchCuentasCobro();
-    await recomputeSiguienteNumero();
+    PRESTADOR = await fetchPrestador();
+    document.getElementById("pr-siguiente-numero").value = PRESTADOR.siguienteNumero;
     renderHistorial();
     showAlert(`Cuenta de cobro N° ${String(c.numero).padStart(3,"0")} eliminada. Próximo número: ${String(PRESTADOR.siguienteNumero).padStart(3,"0")}.`, "ok");
   }catch(e){
@@ -546,13 +567,23 @@ function showNeedsProject(){
   document.getElementById("needs-login").hidden = false;
   document.getElementById("cc-root").hidden = true;
 }
+function showNeedsConsent(){
+  document.getElementById("needs-login-text").textContent = "Antes de continuar, debes aceptar la política de tratamiento de datos en la app principal.";
+  document.getElementById("needs-login").hidden = false;
+  document.getElementById("cc-root").hidden = true;
+}
 async function enterPage(){
+  // Habeas Data: el formulario para aceptar la política solo vive en index.html.
+  if (!(await tieneConsentimientoVigente())){ showNeedsConsent(); return; }
   const { activo } = await resolverProyectoActivo();
   if (!activo){ showNeedsProject(); return; }
 
   document.getElementById("needs-login").hidden = true;
   document.getElementById("cc-root").hidden = false;
   document.getElementById("cc-proyecto-nombre").textContent = activo.nombre;
+
+  await fetchSuscripcion();
+  renderSuscripcionBanner();
 
   ENTIDADES = await fetchEntidades();
   REMITENTES = await fetchRemitentes();
@@ -568,8 +599,8 @@ async function enterPage(){
   renderHistorial();
 
   const hoy = new Date();
-  document.getElementById("gen-desde").value = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0,10);
-  document.getElementById("gen-hasta").value = hoy.toISOString().slice(0,10);
+  document.getElementById("gen-desde").value = getLocalDateISO(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+  document.getElementById("gen-hasta").value = getLocalDateISO(hoy);
 }
 
 document.addEventListener("DOMContentLoaded", ()=>{
@@ -595,4 +626,9 @@ document.addEventListener("DOMContentLoaded", ()=>{
     document.getElementById("hist-hasta").value = "";
     renderHistorial();
   });
+
+  const dlgFechaPago = document.getElementById("dlg-fecha-pago");
+  document.getElementById("btn-close-fecha-pago").addEventListener("click", ()=> dlgFechaPago.close());
+  dlgFechaPago.addEventListener("click", (e)=>{ if (e.target === dlgFechaPago) dlgFechaPago.close(); });
+  document.getElementById("btn-confirmar-fecha-pago").addEventListener("click", handleConfirmarFechaPago);
 });
